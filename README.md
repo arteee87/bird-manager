@@ -33,7 +33,8 @@ reconciles the live configuration only after an explicit Apply.
 Add the apt repository and install:
 
 ```sh
-echo 'deb [signed-by=/usr/share/keyrings/bird-manager.gpg] https://deb.arteee87.ru stable main' \
+curl -fsSL https://apt.arteee87.ru/bird-manager.asc | sudo gpg --dearmor -o /usr/share/keyrings/bird-manager.gpg
+echo 'deb [signed-by=/usr/share/keyrings/bird-manager.gpg] https://apt.arteee87.ru stable main' \
   | sudo tee /etc/apt/sources.list.d/bird-manager.list
 sudo apt update
 sudo apt install bird-manager
