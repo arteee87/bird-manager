@@ -49,3 +49,6 @@ staged/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Local planning notes
+docs/alpine_port_plan.md
