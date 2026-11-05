@@ -1,0 +1,367 @@
+#!/bin/sh
+set -eu
+
+if [ -f /usr/share/debconf/confmodule ] && [ -n "${DPKG_MAINTSCRIPT_PACKAGE:-}" ]; then
+    . /usr/share/debconf/confmodule
+else
+    db_input() { :; }
+    db_go() { :; }
+    db_get() { RET=false; }
+    db_set() { :; }
+    db_reset() { :; }
+fi
+
+CONFIG_ETC_DIR=/etc/bird-manager
+CONFIG_LIVE_DIR=/etc/bird/live
+CONFIG_MAIN=/etc/bird/bird.conf
+CONFIG_BIRD_BIN=bird
+CONFIG_BIRDC_BIN=birdc
+CONFIG_BIRD_SOCKET=
+if [ -f "$CONFIG_ETC_DIR/.env" ]; then
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        case "$key" in
+            \#*|'') continue ;;
+            BIRD_LIVE_DIR) CONFIG_LIVE_DIR=$value ;;
+            BIRD_MAIN_CONFIG) CONFIG_MAIN=$value ;;
+            BIRD_BIN_PATH) CONFIG_BIRD_BIN=$value ;;
+            BIRDC_BIN_PATH) CONFIG_BIRDC_BIN=$value ;;
+            BIRD_SOCKET) CONFIG_BIRD_SOCKET=$value ;;
+        esac
+    done < "$CONFIG_ETC_DIR/.env"
+    CONFIG_LIVE_DIR=${CONFIG_LIVE_DIR#\"}
+    CONFIG_LIVE_DIR=${CONFIG_LIVE_DIR%\"}
+    CONFIG_MAIN=${CONFIG_MAIN#\"}
+    CONFIG_MAIN=${CONFIG_MAIN%\"}
+    CONFIG_BIRD_BIN=${CONFIG_BIRD_BIN#\"}
+    CONFIG_BIRD_BIN=${CONFIG_BIRD_BIN%\"}
+    CONFIG_BIRDC_BIN=${CONFIG_BIRDC_BIN#\"}
+    CONFIG_BIRDC_BIN=${CONFIG_BIRDC_BIN%\"}
+    CONFIG_BIRD_SOCKET=${CONFIG_BIRD_SOCKET#\"}
+    CONFIG_BIRD_SOCKET=${CONFIG_BIRD_SOCKET%\"}
+fi
+
+STATE_DIR=${BIRD_MANAGER_STATE_DIR:-/var/lib/bird-manager}
+ETC_DIR=${BIRD_MANAGER_ETC_DIR:-$CONFIG_ETC_DIR}
+APP_DIR=${BIRD_MANAGER_APP_DIR:-/usr/lib/bird-manager}
+LIVE_DIR=${BIRD_LIVE_DIR:-$CONFIG_LIVE_DIR}
+MAIN_CONFIG=${BIRD_MAIN_CONFIG:-$CONFIG_MAIN}
+BIRD_BIN=${BIRD_BIN_PATH:-$CONFIG_BIRD_BIN}
+BIRDC_BIN=${BIRDC_BIN_PATH:-$CONFIG_BIRDC_BIN}
+BIRD_SOCKET=${BIRD_SOCKET:-$CONFIG_BIRD_SOCKET}
+SERVICE_USER=${BIRD_MANAGER_USER:-bird-manager}
+SERVICE_GROUP=${BIRD_MANAGER_GROUP:-bird-manager}
+
+REMOVE_ALL=false
+case "${1:-}" in
+    remove)
+        if [ "${BIRD_MANAGER_REMOVE_ALL_DATA+x}" = x ]; then
+            if [ "$BIRD_MANAGER_REMOVE_ALL_DATA" = "true" ]; then
+                REMOVE_ALL=true
+            fi
+        else
+            db_input high bird-manager/remove-all-data || true
+            db_go || true
+            db_get bird-manager/remove-all-data || true
+            if [ "${RET:-false}" = "true" ]; then
+                REMOVE_ALL=true
+            fi
+            db_set bird-manager/remove-all-data false || true
+        fi
+        ;;
+    purge)
+        REMOVE_ALL=true
+        db_reset bird-manager/remove-all-data || true
+        ;;
+    *)
+        ;;
+esac
+
+if [ "$REMOVE_ALL" = true ]; then
+    REMOVE_USER=false
+    if [ -f "$STATE_DIR/.system-user-created" ]; then
+        REMOVE_USER=true
+    fi
+    if ! python3 - "$MAIN_CONFIG" "$LIVE_DIR" "$STATE_DIR" "$ETC_DIR" "$APP_DIR" "$BIRD_BIN" "$BIRDC_BIN" "$BIRD_SOCKET" <<'PY'
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+main_path = Path(sys.argv[1])
+live_dir = Path(sys.argv[2])
+state_dir = Path(sys.argv[3])
+etc_dir = Path(sys.argv[4])
+app_dir = Path(sys.argv[5])
+bird_bin = sys.argv[6]
+birdc_bin = sys.argv[7]
+bird_socket = sys.argv[8]
+begin = '# BEGIN bird-manager managed includes'
+end = '# END bird-manager managed includes'
+include_re = re.compile(r'^\s*include\s+["\']([^"\']+)["\']\s*;\s*$')
+
+
+class CleanupError(Exception):
+    pass
+
+
+def read_text(path):
+    try:
+        return path.read_text(encoding='utf-8')
+    except OSError as exc:
+        raise CleanupError(f'cannot read {path}: {exc}') from exc
+
+
+def atomic_write(path, content, metadata):
+    fd, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, stat.S_IMODE(metadata.st_mode))
+        try:
+            os.chown(temporary, metadata.st_uid, metadata.st_gid)
+        except OSError:
+            pass
+        os.replace(temporary, path)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def parse_bundle(live_dir):
+    entrypoint = live_dir / 'bird-manager.conf'
+    if not entrypoint.is_file():
+        raise CleanupError(f'{entrypoint} is missing')
+    live_root = live_dir.resolve(strict=True)
+    sources = []
+    for line in read_text(entrypoint).splitlines():
+        match = include_re.match(line)
+        if not match:
+            continue
+        candidate = Path(match.group(1))
+        if not candidate.is_absolute():
+            candidate = live_dir / candidate
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise CleanupError(f'cannot resolve {candidate}: {exc}') from exc
+        if os.path.commonpath((str(live_root), str(resolved))) != str(live_root):
+            raise CleanupError(f'included file is outside {live_dir}: {resolved}')
+        if not resolved.is_file():
+            raise CleanupError(f'included path is not a file: {resolved}')
+        sources.append(resolved)
+    if not sources:
+        raise CleanupError(f'{entrypoint} contains no file includes')
+    return sources
+
+
+def build_candidate(original):
+    block_pattern = re.compile(re.escape(begin) + r'.*?' + re.escape(end), re.DOTALL)
+    blocks = list(block_pattern.finditer(original))
+    if len(blocks) > 1:
+        raise CleanupError('multiple bird-manager managed blocks found')
+    if not blocks:
+        live_root = live_dir.resolve(strict=True)
+        for line in original.splitlines():
+            match = include_re.match(line)
+            if not match:
+                continue
+            candidate = Path(match.group(1))
+            if not candidate.is_absolute():
+                candidate = live_dir / candidate
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if os.path.commonpath((str(live_root), str(resolved))) == str(live_root):
+                raise CleanupError('direct live include remains outside the managed block')
+        return original
+
+    bundle_parts = []
+    for source in parse_bundle(live_dir):
+        content = read_text(source).rstrip()
+        if content:
+            bundle_parts.append(content)
+    if not bundle_parts:
+        raise CleanupError('managed bundle is empty')
+    bundle = '\n\n'.join(bundle_parts) + '\n'
+    block = blocks[0]
+    before = original[:block.start()].rstrip()
+    after = original[block.end():].lstrip()
+    parts = []
+    if before:
+        parts.append(before + '\n\n')
+    parts.append(bundle)
+    if after:
+        parts.append('\n' + after)
+    return ''.join(parts)
+
+
+def validate_candidate(candidate):
+    try:
+        process = subprocess.run(
+            [bird_bin, '-p', '-c', str(candidate)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CleanupError(f'BIRD validation failed: {exc}') from exc
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).strip()[:500]
+        raise CleanupError(f'BIRD validation failed: {detail}')
+
+
+def birdc_command(command):
+    result = [birdc_bin]
+    if bird_socket:
+        result.extend(['-s', bird_socket])
+    result.append(command)
+    return result
+
+
+def bird_is_active():
+    try:
+        process = subprocess.run(
+            birdc_command('show status'),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        process = None
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CleanupError(f'cannot query BIRD status: {exc}') from exc
+    if process is not None and process.returncode == 0:
+        return True
+    systemctl = shutil.which('systemctl')
+    if systemctl:
+        result = subprocess.run(
+            [systemctl, 'is-active', '--quiet', 'bird.service'],
+            check=False,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            raise CleanupError('BIRD is active but birdc status is unavailable')
+    return False
+
+
+def reconfigure_bird():
+    try:
+        process = subprocess.run(
+            birdc_command('configure'),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CleanupError(f'birdc configure failed: {exc}') from exc
+    if process.returncode != 0:
+        detail = (process.stderr or process.stdout).strip()[:500]
+        raise CleanupError(f'birdc configure failed: {detail}')
+
+
+def remove_known_live_files():
+    fixed = {'bird-manager.conf', 'networks.conf', 'routes.conf', 'core.conf'}
+    suffixes = {'', '.bak', '.tmp', '.rollback.tmp', '.restore.tmp', '.bird-manager.tmp'}
+    if not live_dir.is_dir():
+        return
+    for entry in live_dir.iterdir():
+        name = entry.name
+        base = name
+        for suffix in sorted(suffixes, key=len, reverse=True):
+            if suffix and name.endswith(suffix):
+                base = name[:-len(suffix)]
+                break
+        managed = base in fixed or re.fullmatch(r'policy_\d+\.conf', base) is not None
+        if managed and (entry.is_file() or entry.is_symlink()):
+            entry.unlink()
+    try:
+        live_dir.rmdir()
+    except OSError:
+        pass
+
+
+def remove_tree(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def remove_etc_files():
+    if not etc_dir.is_dir():
+        return
+    env_file = etc_dir / '.env'
+    if env_file.is_file() or env_file.is_symlink():
+        env_file.unlink()
+    try:
+        etc_dir.rmdir()
+    except OSError:
+        pass
+
+if not main_path.is_file():
+    raise CleanupError(f'{main_path} does not exist')
+try:
+    original_metadata = main_path.stat()
+    original = read_text(main_path)
+    candidate = build_candidate(original)
+    fd, candidate_path = tempfile.mkstemp(prefix=f'.{main_path.name}.', dir=main_path.parent)
+    os.close(fd)
+    candidate_file = Path(candidate_path)
+    try:
+        candidate_file.write_text(candidate, encoding='utf-8')
+        os.chmod(candidate_file, stat.S_IMODE(original_metadata.st_mode))
+        try:
+            os.chown(candidate_file, original_metadata.st_uid, original_metadata.st_gid)
+        except OSError:
+            pass
+        validate_candidate(candidate_file)
+        changed = candidate != original
+        active = bird_is_active() if changed else False
+        if changed:
+            os.replace(candidate_file, main_path)
+            try:
+                if active:
+                    reconfigure_bird()
+            except Exception:
+                atomic_write(main_path, original, original_metadata)
+                raise
+    finally:
+        if candidate_file.exists():
+            candidate_file.unlink()
+except CleanupError:
+    raise
+except Exception as exc:
+    raise CleanupError(str(exc)) from exc
+
+remove_known_live_files()
+remove_tree(state_dir)
+remove_etc_files()
+remove_tree(app_dir)
+print('bird-manager: database, state, environment and managed live files removed')
+PY
+    then
+        echo "bird-manager: WARNING - cleanup was not completed; inspect $MAIN_CONFIG and $LIVE_DIR" >&2
+    elif [ "${BIRD_MANAGER_SKIP_USER_REMOVAL:-0}" != "1" ] && [ "$REMOVE_USER" = true ]; then
+        if command -v deluser >/dev/null 2>&1; then
+            deluser "$SERVICE_USER" >/dev/null 2>&1 || true
+        fi
+        if [ "$SERVICE_GROUP" != "bird" ] && command -v delgroup >/dev/null 2>&1; then
+            delgroup "$SERVICE_GROUP" >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
+exit 0

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+if [ -d /run/systemd/system ]; then
+    if [ "${1:-}" = "upgrade" ]; then
+        systemctl stop bird-manager.service >/dev/null 2>&1 || true
+    else
+        systemctl disable --now bird-manager.service >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

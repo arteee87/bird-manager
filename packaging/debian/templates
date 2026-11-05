@@ -1,0 +1,30 @@
+Template: bird-manager/append-managed-include
+Type: boolean
+Default: false
+Description: Add the bird-manager include to /etc/bird/bird.conf?
+  bird-manager found an external BIRD configuration that does not reference
+  /etc/bird/live. Existing content will be preserved and a marked include of
+  /etc/bird/live/bird-manager.conf will be appended.
+  .
+  If you choose "Yes", the current file is backed up as
+  /etc/bird/bird.conf.bak-before-managed-entrypoint before the validated change.
+  If you choose "No", bird-manager will not modify the main configuration and
+  Apply will remain disabled until an administrator completes the migration.
+
+Template: bird-manager/remove-all-data
+Type: boolean
+Default: false
+Description: Remove all bird-manager data and generated BIRD configuration?
+  If you choose "Yes", the package removes its SQLite database, staged files,
+  backups, manifest, /etc/bird-manager/.env, its dedicated system account and
+  the generated files in /etc/bird/live.
+  .
+  Before live files are removed, the current bird-manager include block in
+  /etc/bird/bird.conf is replaced inline with the effective generated BIRD
+  configuration. The candidate is validated with "bird -p" and reloaded with
+  "birdc configure" when BIRD is active. No persistent backup copy of
+  bird.conf is created. Unknown files in /etc/bird/live are preserved.
+  .
+  If you choose "No", the database, environment file and live configuration
+  remain on disk for a later reinstall. "apt purge" always performs the full
+  cleanup without asking this question.

@@ -1,0 +1,387 @@
+.TH BIRD-MANAGER 8 "@@MONTH@@ @@YEAR@@" "bird-manager @@VERSION@@" "System Administration"
+.SH NAME
+bird-manager \- Web dashboard for BIRD configuration management
+.SH SYNOPSIS
+.B systemctl
+.RB [ start | stop | status | restart ]
+.br
+.B /etc/bird-manager/.env
+.SH DESCRIPTION
+.B bird-manager
+is a web application for managing BIRD networks, ASN:COMM communities and
+BGP peers. SQLite is the only and enforced data source for the BIRD daemon. The application is a plain WSGI
+application served by
+.BR waitress (8)
+on port 5000.
+.PP
+The generated BIRD configuration is split into files. The editable base
+contains the router id and operator comments. Generated files contain routes,
+protocols and community policies. The web panel exposes them as read-only
+views or summary counters:
+.TP
+.I bird-manager.conf
+Generated ordered include list. It is shown read-only in the web panel.
+.TP
+.I networks.conf
+Editable base configuration. In a reset installation it contains only the
+header and router id.
+.TP
+.I routes.conf
+Generated static routes and peer reachability routes.
+.TP
+.I core.conf
+Generated device, direct and BGP protocols.
+.TP
+.I policy_<id>.conf
+Generated community definition and export policy for one community database ID.
+.PP
+The service reconciles the generated files at startup and after every database
+mutation. It validates the complete included bundle with
+.BR "bird -p" ,
+updates
+.I /etc/bird/live/bird-manager.conf
+without modifying the main BIRD configuration, and reloads BIRD with
+.BR "birdc configure" .
+A reload failure leaves the web service running with a degraded health status.
+.SH CONFIGURATION
+Configuration is read from
+.I .env
+next to the package and, for a Debian installation, from
+.IR /etc/bird-manager/.env .
+Restart the service after editing it:
+.B systemctl restart bird-manager
+.TP
+.B DB_PATH
+SQLite database path. Package default:
+.IR /var/lib/bird-manager/app.db .
+.TP
+.B BIRD_LIVE_DIR
+Live directory read by BIRD. Package default:
+.IR /etc/bird/live .
+.TP
+.B BIRD_STAGED_DIR
+Generated staging directory. Package default:
+.IR /var/lib/bird-manager/staged .
+.TP
+.B BIRD_MAIN_CONFIG
+Read-only main BIRD configuration containing the stable manager include. Default:
+.IR /etc/bird/bird.conf .
+.TP
+.B BIRD_MANIFEST_PATH
+Manifest of generated files. Default:
+.IR /var/lib/bird-manager/managed-files.json .
+.TP
+.B BIRD_PUBLISH_BAK_DIR
+Directory with the rollback snapshot of the live bundle. Snapshots are kept
+outside the BIRD include directory, so the live directory only contains files
+that BIRD reads. Default:
+.IR /var/lib/bird-manager/live-bak .
+.TP
+.B BIRD_BIN_PATH
+BIRD binary used for parse validation. Default:
+.IR bird .
+.TP
+.B BIRDC_BIN_PATH
+BIRD control binary used for reload. Default:
+.IR birdc .
+.TP
+.B BIRD_SOCKET
+BIRD control socket. Empty means the daemon default,
+.IR /run/bird/bird.ctl .
+.TP
+.B BIRD_ROUTER_ID
+Router ID. The default,
+.BR auto ,
+detects a host IPv4 address and falls back to 192.0.2.1.
+.TP
+.B BIRD_LOCAL_AS
+Local ASN. Default: 65500.
+.TP
+.B BIRD_BACKUP_RETENTION
+Number of local full snapshot slots retained. The System tab shows used/limit
+capacity. Valid range: 1 through 99. Default: 5.
+.TP
+.B USERNAME
+Identifier for user's actions in journal and audit. Does not affect
+permissions/access. Default:
+.BR User .
+.TP
+.B APP_HOST
+HTTP bind address. Use 127.0.0.1 when a reverse proxy is the only intended
+entry point. Default:
+.BR 0.0.0.0 .
+.TP
+.B BIRD_TRUSTED_SOURCES
+Comma separated CIDR list of clients allowed to reach the API. The API has no
+authentication, so this allowlist is the only gate in front of the BIRD
+configuration; requests outside it are rejected with 403 before the body is
+read. The token
+.B auto
+resolves to the network of this host's primary IPv4 interface; bridge subnets
+are never added automatically. Default:
+.BR "auto,127.0.0.1/32,::1/128" .
+.TP
+.B BIRD_TRUSTED_PROXIES
+Comma separated CIDR list of reverse proxies whose
+.B X-Forwarded-For
+header is honoured. When empty the header is ignored, so a client cannot
+present a fake address. Default: empty.
+.TP
+.B BIRD_TRUSTED_ORIGINS
+Comma separated list of origins allowed to send POST/PUT/DELETE. When set, a
+mutating request without a matching Origin header is rejected with 403, which
+blocks cross-site browser requests; note that curl and scripts send no Origin.
+When empty the check is disabled. Default: empty.
+.TP
+.B BIRD_MAX_BODY_BYTES
+Largest accepted request body. Larger requests are rejected with 413 before
+the body is read. Default: 1048576.
+.TP
+.B BIRD_DEBUG_ERRORS
+When 1, 5xx responses carry the exception text. Keep 0 in production; the
+traceback is always written to the journal. Default: 0.
+.SH ACCESS CONTROL
+Every response carries X-Content-Type-Options, X-Frame-Options,
+Referrer-Policy, a strict Content-Security-Policy and Cache-Control: no-store.
+The dashboard ships no inline script so the policy needs no unsafe-inline.
+.PP
+The effective policy is printed at startup:
+.PP
+.nf
+[ACCESS] trusted sources: ...
+.fi
+.PP
+Behind a reverse proxy set APP_HOST=127.0.0.1, add the proxy address to
+BIRD_TRUSTED_PROXIES and the public origin to BIRD_TRUSTED_ORIGINS; see
+README.md for a complete nginx example.
+.SH GENERATED FILES
+The main configuration contains one stable include:
+.PP
+.nf
+include "/etc/bird/live/bird-manager.conf";
+.fi
+.PP
+The generated entrypoint is ordered as:
+.PP
+.nf
+include "/etc/bird/live/networks.conf";
+include "/etc/bird/live/policy_<id>.conf";
+include "/etc/bird/live/export.conf";
+include "/etc/bird/live/routes.conf";
+include "/etc/bird/live/core.conf";
+.fi
+.PP
+A BIRD channel keeps exactly one export filter and a repeated
+.B export filter
+line silently overwrites the previous one, so the bundle always emits a single
+.B export filter export_own_networks;
+reference. The filter in export.conf tags every DB network with all of its
+Communities, which means adding a Community no longer hides the Communities
+exported before it; routes that are not in the database are not exported.
+.PP
+Apply never modifies the main configuration. Disabling a
+community removes its policy file and include. A network with
+.B enabled=false
+is omitted from routes and policies. A community without enabled networks is
+automatically disabled.
+.SH DATABASE API
+The Web UI and JSON API manage:
+.TP
+.B Network
+prefix, description, status, community_ids and enabled.
+.TP
+.B Community
+name, values, description and enabled.
+.TP
+.B BgpPeer
+name, local ASN, neighbor address and neighbor ASN.
+.PP
+Deleting a Community also deletes all related Network records. The API is
+unauthenticated; the optional user_id is stored in the audit log.
+.SH DASHBOARD
+The web page uses three left-aligned Windows-style tabs inside one centered
+75%-wide block. The outer
+.B .tabs
+container owns the only
+.B #cbd5e1
+outline. The internal tab strip and panel area are layout-only and have no
+frames. Inactive tabs keep a dark background and vertical separators; the
+active white tab opens directly into the content area.
+.TP
+.B Сети
+Network and community hierarchy plus the bulk network form. The hierarchy is
+collapsed on first activation.
+.TP
+.B BIRD
+Staged configuration, read-only generated files, Apply and BGP peer creation.
+.TP
+.B Система
+A live BIRD peers block, configuration status, BIRD restart and reconfiguration
+timestamps, a dedicated backup list and the audit log.
+.PP
+The page itself does not scroll. The outer tabs block fills the viewport height
+between the header and its margins. On every tab the upper panel receives all
+free vertical space while lower panels keep their natural height. Long content
+scrolls only inside the panel that owns it.
+.PP
+The System tab order is BIRD peers, configuration status, backup and audit. The
+backup panel shows used/limit slots and one row per archive with creation time,
+restore and delete actions. Configuration status reads the actual BIRD restart
+and reconfiguration timestamps from
+.BR "birdc show status" .
+.PP
+The BIRD peers block is a read-only snapshot of
+.BR "birdc show protocols all" .
+Service protocols (any non-BGP type) are listed one per row with their up/down
+state. BGP sessions are listed in a table with the columns Managed, Peer,
+Neighbor, Neighbor AS, Local AS, State, Prefixes, Since and Last error. Managed
+is
+.B yes
+when the protocol is in the panel peer list and
+.B no
+when it was added to bird.conf by hand. State holds two badges in one cell: the
+channel state, and the BGP state taken from the BGP state line of
+.BR "birdc show protocols all" ,
+falling back to the summary State column. The second badge is shown only when it
+differs from the channel state, because a session can be up while still not
+exchanging routes. Colours are semantic - green for
+.BR Established ,
+amber for any other state - and hovering either badge names the birdc field the
+value came from. Prefixes shows rx and tx; a dash means BIRD printed no route
+counters for that channel, which is what a down session does. Last error is the
+last column and stays empty while there is no error. A peer configured in the
+panel but missing from the BIRD output is shown as not present in BIRD.
+.PP
+The block refreshes when the System tab activates, on the header refresh button,
+and automatically every 30 seconds while the tab is active, the panel is
+expanded and the page is visible.
+.PP
+The header has no user input. Web actions use the USERNAME value as their audit
+identifier only; authentication and permissions are unchanged.
+.PP
+The active tab is stored in the URL hash as
+.BR #/networks ,
+.B #/bird
+or
+.BR #/system .
+Data is loaded on first tab activation. The header refresh button reloads the
+active tab and network counter.
+.SH EDITOR
+The editor exposes only
+.IR networks.conf .
+It does not display or modify routes.conf, core.conf or policy files. Preview
+in split mode does not inject generated BIRD lines or ghost rows into the
+editor.
+.SH FIRST INSTALLATION
+Install BIRD first. The package seeds a minimal live base and ensures that
+.I /etc/bird/bird.conf
+exists before starting bird.service. For a manual setup:
+.PP
+.nf
+install bird3
+systemctl enable --now bird
+birdc show status
+.fi
+.PP
+If bird.conf is an external configuration, the package can append one marked
+stable include while preserving all existing content. A recognized legacy
+manager block is migrated automatically. Every candidate is validated before
+commit and the previous main file is backed up.
+.SH HEALTH AND RELOAD
+.nf
+curl http://127.0.0.1:5000/api/health
+birdc show status
+.fi
+.PP
+A healthy response has status healthy. A failed BIRD reload returns degraded,
+with reload_warning and reload_detail fields; the previous running BIRD
+configuration is retained.
+.SH EXAMPLE
+Add a community and network through the API, then reconcile:
+.PP
+.nf
+curl -X POST http://127.0.0.1:5000/api/communities \\
+  -H 'Content-Type: application/json' \\
+  -d '{"name":"65500:102","enabled":true}'
+.br
+curl -X POST http://127.0.0.1:5000/api/networks \\
+  -H 'Content-Type: application/json' \\
+  -d '{"prefix":"192.0.2.0/24","enabled":true}'
+.br
+curl -X POST http://127.0.0.1:5000/api/config/generate
+.fi
+.PP
+The generated policy is stored as policy_<community-id>.conf. The generated
+bird-manager.conf entrypoint is updated automatically; bird.conf is unchanged.
+.SH BACKUP
+The backup API stores SQLite, staged/live files and the generated-file manifest,
+with local rotation controlled by BIRD_BACKUP_RETENTION. The API returns every
+archive, used and free slots. A selected archive can be restored with
+.B POST /api/backup/<id>/restore
+or deleted with
+.BR "DELETE /api/backup/<id>" .
+The compatibility endpoint
+.B POST /api/backup/restore
+restores the newest archive. IDs are strict
+.B latest
+or
+.B YYYYMMDD-HHMMSS-microseconds
+identifiers; filesystem paths are rejected. The main config is archived for
+offline recovery but is never restored over the installed file. Legacy archives
+without bird-manager.conf synthesize the entrypoint during restore. Selected
+archives pass
+.B bird -p
+before state is replaced, followed by
+.BR "birdc configure" .
+.SH UNINSTALL
+.B apt remove bird-manager
+asks whether to remove the database, staged files, backups, environment and
+package-created live files. The default answer is No. On Yes, the managed block
+in
+.I /etc/bird/bird.conf
+is replaced inline with the effective generated configuration. The candidate
+must pass
+.BR "bird -p" ,
+and a running BIRD must accept
+.BR "birdc configure" ,
+before live files are removed. No persistent backup copy of bird.conf is
+created. Unknown files in the live directory are preserved.
+.PP
+.B apt purge bird-manager
+performs the same full cleanup without asking. The BIRD package, service and
+bird group are not removed.
+.SH SYSTEMD
+The package installs
+.IR bird-manager.service .
+It runs as the dedicated bird-manager user with supplementary membership in
+the bird group. The live directory is setgid so atomic replacements remain
+readable by BIRD. Common operations:
+.PP
+.nf
+systemctl status bird-manager
+journalctl -u bird-manager -f
+curl http://127.0.0.1:5000/api/health
+.fi
+.SH FILES
+.TP
+.I /etc/bird-manager/.env
+Runtime configuration (conffile).
+.TP
+.I /usr/lib/bird-manager
+Application code.
+.TP
+.I /var/lib/bird-manager
+SQLite database, staged files, backups and manifest.
+.TP
+.I /etc/bird/live
+Generated and editable live files read by BIRD, including the generated
+bird-manager.conf entrypoint.
+.TP
+.I /etc/bird/bird.conf
+Operator-owned main configuration containing one stable manager include.
+.SH SEE ALSO
+.BR bird (8),
+.BR birdc (8),
+.BR systemd.service (5)
+.SH AUTHORS
+bird-manager maintainers.

@@ -1,0 +1,35 @@
+[Unit]
+Description=bird-manager - Web dashboard for BIRD configuration management
+Documentation=man:bird-manager(8)
+Documentation=file:/usr/share/doc/bird-manager/README.Debian
+Wants=bird.service
+After=network.target bird.service
+
+[Service]
+Type=simple
+User=bird-manager
+Group=bird-manager
+SupplementaryGroups=bird
+UMask=0027
+WorkingDirectory=/usr/lib/bird-manager
+EnvironmentFile=/etc/bird-manager/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m app.routes --port 5000
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/etc/bird/live /var/lib/bird-manager
+ReadOnlyPaths=/etc/bird/bird.conf
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

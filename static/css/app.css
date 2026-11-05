@@ -1,0 +1,689 @@
+/* app.css — Module 4 base styles (desktop-first, min width 1024px per R4.5.4). */
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; height: 100%; }
+
+body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    min-width: 1024px;
+    overflow: hidden;
+    font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #f4f6f8;
+    color: #1f2933;
+}
+
+/* Header */
+.app-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 24px;
+    background: #1f2933;
+    color: #ffffff;
+}
+
+.app-header h1 { margin: 0; font-size: 20px; }
+
+.app-version { font-size: 13px; color: #9aa5b1; font-weight: 600; }
+
+/* Banners (R4.5.2) */
+.banner { padding: 6px 12px; border-radius: 4px; font-size: 14px; }
+.banner-error   { background: #dc2626; color: #ffffff; }
+
+.hidden { display: none !important; }
+
+.tabs {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    width: 75%;
+    /* Measured floor for the Networks tab: the editing row was measured at
+       490px in a browser (prefix 151 + description 140 + status select 37 +
+       enabled checkbox 42 + Save 71 + Delete 81, plus the gaps and the
+       8px padding). It wraps onto several lines at that width rather than
+       overflowing, so this is a readability floor — below it fields start
+       getting squeezed. Two panels + row gap + outer padding. */
+    min-width: 1030px;
+    min-height: 0;
+    margin: 18px auto;
+    overflow: hidden;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+}
+
+.tab-strip {
+    display: flex;
+    justify-content: flex-start;
+    width: calc(100% + 2px);
+    margin: -1px -1px 0;
+    background: transparent;
+    border: none;
+}
+
+.tab-button {
+    position: relative;
+    z-index: 1;
+    padding: 9px 24px;
+    background: #475569;
+    color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+    border-right-width: 0;
+    border-bottom-color: transparent;
+    cursor: pointer;
+    font: inherit;
+}
+
+.tab-button:last-of-type { border-right-width: 1px; }
+.tab-button:hover:not(.active) { background: #64748b; }
+.tab-button:focus-visible { outline: 2px solid #2563eb; outline-offset: -3px; }
+.tab-button.active {
+    z-index: 2;
+    background: #ffffff;
+    color: #111827;
+    font-weight: 700;
+    border-bottom-color: transparent;
+}
+
+.tab-panels {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 16px;
+    overflow: hidden;
+    background: #ffffff;
+    border: none;
+}
+
+.tab-panel { flex: 1; min-height: 0; overflow: hidden; }
+.tab-panel[hidden] { display: none; }
+.tab-stack { display: flex; flex-direction: column; gap: 16px; height: 100%; min-height: 0; overflow: hidden; }
+/* Two collapsed lists side by side, each half of the panel width. The row takes
+   the free height, so the full-width forms below keep their own natural size. */
+.tab-row { display: flex; gap: 16px; flex: 1 1 0; min-height: 0; flex-wrap: nowrap; }
+
+.panel-hierarchy,
+.panel-peers,
+.panel-config-editor,
+.panel-config-status {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-add,
+.panel-backup,
+.panel-bgp-sessions,
+.panel-service-protocols,
+.panel-audit {
+    flex: 0 0 auto;
+    min-height: 0;
+    max-height: 40vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* The live BIRD sessions block behaves like the two lists on the Networks tab: an
+   open panel takes the free height of the stack and pushes the ones below it
+   down. It sits in the capped group above, so the 40vh ceiling has to be lifted
+   and the flex basis zeroed, exactly as .panel-config-status does. Another
+   panel opened alongside grows too, so it takes its share and this panel's
+   bottom edge moves up. */
+.panel-bgp-sessions.expanded {
+    flex: 1 1 0;
+    min-height: 0;
+    max-height: none;
+}
+
+.panel-hierarchy:not(.expanded),
+.panel-peers:not(.expanded),
+.panel-config-status:not(.expanded) { flex: 0 0 auto; min-height: 0; }
+
+/* Must come after the :not(.expanded) rules above, which carry the same
+   specificity (a :not() argument adds no weight of its own) and would otherwise
+   win on source order. They shrink a collapsed panel to its content — fine in
+   a single-column stack, wrong here: a 50% basis keeps each panel on its own
+   half whether it is expanded or collapsed, so opening the network tree no
+   longer pushes the peer list to the right edge.
+
+   min-width holds the panel at the measured editing-row width; the editor
+   wraps rather than forcing a horizontal scrollbar. */
+.tab-row > .panel { flex: 1 1 50%; min-width: 490px; }
+
+.config-status-scroll { overflow-y: auto; }
+.panel-config-status .panel-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.config-sections { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.config-section { border-bottom: 1px solid #d0d7de; }
+.config-section:last-child { border-bottom: none; }
+.config-section-toggle {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 16px; border: 0; background: #f8fafc;
+    color: #1f2937; font: inherit; font-weight: 600; text-align: left; cursor: pointer;
+}
+.config-section-toggle::before { content: '▸ '; color: #6b7280; }
+.config-section.expanded .config-section-toggle::before { content: '▾ '; }
+.config-section-toggle span:first-of-type { flex: 1; }
+.config-section:not(.expanded) .config-section-body { display: none; }
+.section-count { white-space: nowrap; font-size: 12px; font-weight: 600; }
+.config-section-body { min-height: 0; background: #ffffff; }
+.config-editor-panes { min-height: 0; display: flex; padding: 12px 16px 8px; }
+.config-summary-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 10px 16px 14px; }
+.config-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border: 1px solid #e5e7eb; border-radius: 4px; font: 13px/20px Consolas, Menlo, monospace; }
+.config-summary-row .section-count { color: #374151; }
+/* A changed file can be expanded to fetch its diff on demand; the bundle diff
+ * for a populated table is megabytes, so it is never part of the overview. */
+.config-summary-row.expandable { width: 100%; background: #ffffff; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.config-summary-row.expandable:hover { border-color: #c7d2fe; background: #f8fafc; }
+.config-summary-row.expandable:focus-visible { outline: 2px solid #4f46e5; outline-offset: 1px; }
+.config-summary-row.expanded { border-color: #4f46e5; }
+.config-summary-row.too-large { color: #6b7280; cursor: default; }
+.config-summary-row.too-large:hover { border-color: #e5e7eb; background: #ffffff; }
+.diff-scroll { flex: 1; min-width: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid #d0d7de; border-radius: 4px; background: #ffffff; }
+.diff-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: flex-start;
+    width: 100%;
+    min-width: 0;
+    position: relative;
+}
+.config-errors { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 2; }
+.cfg-error-row { position: absolute; left: 0; background: rgba(220,38,38,0.12); border-left: 3px solid #dc2626; }
+.config-pane {
+    font-family: Consolas, Menlo, monospace; font-size: 13px; line-height: 20px;
+    white-space: pre; overflow: auto; resize: none;
+    border: none; outline: none; padding: 8px; background: #ffffff;
+    width: 100%; min-width: 0; max-width: 100%;
+}
+.config-pane:focus { outline: none; }
+
+/* Side-by-side line view. Every row is a grid of two cells with the same 20px
+   pitch as the editor's line-height, so the two columns line up by index
+   rather than by matching paddings and absolute offsets. */
+.row-view {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px;
+    min-width: 0; padding: 8px; background: #f8fafc; overflow: hidden;
+    font: 13px/20px Consolas, Menlo, monospace;
+}
+.row-view-single { grid-template-columns: 1fr; }
+/* Read-only panes are bounded: a full table expands to thousands of rows, and
+   without a cap one expanded summary row becomes a 40000px block. The editor
+   deliberately does not use this — its height follows the line count so the two
+   columns stay aligned with the textarea through the shared scrollbar. */
+.row-view-scroll { max-height: 320px; overflow: auto; }
+/* Every row must span the whole width. A row is itself a grid item of
+   .row-view, and without an explicit span auto-placement puts the first row
+   into column 1 and the second into column 2, so the two land side by side and
+   their cells overlap instead of stacking. */
+.row-line {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; height: 20px;
+}
+.row-view-single .row-line { grid-template-columns: 1fr; }
+.row-cell {
+    min-width: 0; height: 20px; line-height: 20px; white-space: pre;
+    overflow: hidden; text-overflow: clip;
+}
+.row-old { border-left: 3px solid transparent; padding-left: 5px; }
+.row-new { border-left: 3px solid transparent; padding-left: 5px; }
+.row-context .row-old, .row-context .row-new { color: #374151; }
+.row-added .row-old { background: #dcfce7; }
+.row-added .row-new { background: #dcfce7; color: #166534; border-left-color: #16a34a; }
+.row-removed .row-old { background: #fee2e2; color: #dc2626; border-left-color: #dc2626; }
+.row-removed .row-new { background: #fee2e2; }
+.row-changed .row-old { background: #fef3c7; color: #92400e; border-left-color: #d97706; }
+.row-changed .row-new { background: #fef3c7; color: #92400e; border-left-color: #d97706; }
+.row-note { color: #6b7280; background: #f1f5f9; font-style: italic; padding-left: 5px; }
+.section-count .unreadable, .section-count.has-warning .unreadable { color: #b45309; font-weight: 600; }
+.section-note { margin: 0; padding: 10px 16px 14px; color: #6b7280; font-size: 13px; }
+.section-note[hidden] { display: none; }
+.diff-count { margin-left: auto; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.diff-count .add { color: #166534; }
+.diff-count .del { color: #dc2626; }
+.config-actions { display: flex; gap: 12px; align-items: center; padding: 0 16px 8px; flex-wrap: wrap; }
+.diff-timer { font-size: 12px; color: #6b7280; }
+.diff-timer.active { color: #f59e0b; font-weight: 600; }
+.syntax-msg { font-size: 12px; color: #dc2626; font-weight: 600; }
+.config-hint { padding: 0 16px 12px 16px; font-size: 12px; color: #9aa4b2; }
+
+.panel-hierarchy .panel-body,
+.panel-peers .panel-body {
+    flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+    padding: 8px 12px; border-top: 1px solid #d0d7de;
+}
+
+/* The network tree now gets half the width, so long community descriptions
+   have to wrap instead of pushing the row buttons off the edge, and the nesting
+   indent is capped to keep deep groups readable. */
+.panel-hierarchy .group-header-row { flex-wrap: wrap; }
+.panel-hierarchy .group-desc { min-width: 0; overflow-wrap: anywhere; }
+.panel-hierarchy .group-body { padding-left: 12px; }
+/* The editing row carries the real width requirement. A min-width on the panel
+   alone is not enough: the row is a flex item that shrinks with it, so the
+   measured 490px has to be pinned here or the editor keeps getting squeezed. */
+.panel-hierarchy .network-row { flex-wrap: wrap; min-width: 490px; }
+.panel-hierarchy .network-row .net-prefix,
+.panel-hierarchy .network-row .placeholder { overflow-wrap: anywhere; min-width: 0; }
+
+/* BGP peer list: one row per peer. Column widths are fixed so the numbers stay
+   aligned down the list; only the name grows. */
+.peer-list { display: flex; flex-direction: column; gap: 6px; }
+.peer-head, .peer-row {
+    display: flex; gap: 12px; align-items: center;
+}
+.peer-head {
+    padding: 0 0 6px; font-size: 12px; color: #6b7280;
+    border-bottom: 1px solid #d0d7de;
+}
+.peer-row {
+    padding: 6px 0; border-bottom: 1px solid #eef1f5;
+}
+.peer-row:last-child { border-bottom: none; }
+.peer-name { flex: 1 1 auto; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+/* Export-scope tag under the peer id: how many prefixes the peer's own filter
+   carries, or a warning when its ASN matches no community. */
+.peer-scope-tag {
+    display: block; font-weight: 400; font-size: 12px; color: #6b7280;
+    overflow-wrap: anywhere;
+}
+/* Export-scope checkbox: the box and its label share one line, the hint wraps
+   below them. Must not be given the generic `.field` class — `.field input`
+   stretches a control to 100% width, which detached the box from its label. */
+.bgp-scope-field {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 2px 8px; margin-bottom: 8px;
+}
+.bgp-scope-field input { flex: 0 0 auto; width: auto; margin: 0; }
+.form-hint { flex: 1 1 100%; font-size: 12px; color: #9aa4b2; }
+/* RouterOS generator column. Pinned like .peer-act for the same reason: an
+   unpinned track measures 0 in the empty header cell and by content in a row,
+   shifting every column after it. */
+.peer-col-cfg   { flex: 0 0 48px; }
+.peer-col-status { flex: 0 0 72px; }
+.peer-col-as     { flex: 0 0 88px; }
+.peer-col-nb     { flex: 0 0 130px; }
+.peer-col-nbas   { flex: 0 0 96px; }
+.peer-cell {
+    font-family: Consolas, Menlo, monospace; font-size: 13px;
+    overflow-wrap: anywhere; min-width: 0;
+}
+/* Fixed width in the header too. It holds an empty span there, but with
+   flex: 0 0 auto that span measured 0 while the button in a row measured 79px,
+   and the extra 79px of basis shifted .peer-name — and every column after it —
+   to the left. Pinning the track in both places is what keeps the header and
+   the values in line. */
+.peer-act { flex: 0 0 79px; }
+.peer-head, .peer-row { min-width: 660px; }
+
+.panel-add:not(.expanded),
+.panel-backup:not(.expanded),
+.panel-bgp-sessions:not(.expanded),
+.panel-service-protocols:not(.expanded),
+.panel-audit:not(.expanded) { max-height: none; }
+.panel-add.expanded, .panel-backup.expanded {
+    max-height: none;
+}
+.panel-add .panel-body,
+.panel-backup .panel-body,
+.panel-bgp-sessions .panel-body,
+.panel-service-protocols .panel-body,
+.panel-audit .panel-body {
+    flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+}
+.panel-add.expanded .panel-body,
+.panel-backup.expanded .panel-body {
+    overflow-y: visible;
+}
+.panel-audit .panel-body { max-height: 32vh; }
+
+.backup-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.backup-slots { font-weight: 600; }
+.backup-list { display: grid; gap: 6px; min-height: 0; }
+.backup-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+}
+.backup-name { font-family: Consolas, Menlo, monospace; white-space: nowrap; }
+.backup-row .btn[disabled] { opacity: 0.55; cursor: wait; }
+
+/* Panels */
+.panel {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.panel-title { display: flex; align-items: center; gap: 8px; margin: 0; padding: 12px 16px; font-size: 15px; background: #eef1f5; }
+
+/* Collapsible hierarchy panel (R4.5.5) */
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: #eef1f5;
+    gap: 12px;
+    height: 44px;
+}
+
+.panel-header-left {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+}
+
+.panel-header-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.panel-toggle {
+    display: block;
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: left;
+    background: #eef1f5;
+    border: none;
+    cursor: pointer;
+}
+
+/* Inside the flex header the toggle sits next to the count; the search box
+   is pushed to the right edge by the flex:1 on .panel-header-left. */
+.panel-header .panel-toggle {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 0;
+    background: transparent;
+}
+
+.hierarchy-search {
+    width: 150px;
+    flex-shrink: 0;
+    height: 24px;
+}
+
+.hierarchy-search-count {
+    font-size: 13px;
+    color: #6b7280;
+}
+
+/* Search highlight in "Сети и сообщества" */
+.network-row.search-hit { background: #fef08a; }
+.network-row.search-current { background: #facc15; box-shadow: inset 0 0 0 1px #ca8a04; }
+
+.panel-toggle::before { content: "▸ "; }
+.panel.expanded .panel-toggle::before { content: "▾ "; }
+
+.panel-count {
+    display: inline-block;
+    min-width: 28px;
+    margin-left: 0;
+    padding: 1px 8px;
+    font-size: 13px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    border-radius: 10px;
+}
+
+.panel-body { padding: 12px 16px; border-top: 1px solid #d0d7de; }
+
+.placeholder { color: #6b7280; font-size: 13px; }
+
+/* Status badges (R4.1.2) */
+.badge { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; }
+.badge-pending { background: #e5e7eb; color: #4b5563; }
+.badge-applied { background: #dcfce7; color: #166534; }
+.badge-other   { background: #fef3c7; color: #92400e; }
+
+/* ---- Forms, record tables, buttons (R4.1.2 / R4.2.x) ---- */
+
+.form-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.form-row .field { flex: 1; min-width: 220px; }
+
+.field label { display: block; font-size: 13px; color: #6b7280; margin-bottom: 2px; }
+.field input, .field select {
+    width: 100%; padding: 6px 8px; font-size: 14px;
+    border: 1px solid #d0d7de; border-radius: 4px; background: #ffffff;
+}
+.field input.invalid { border-color: #dc2626; background: #fef2f2; }
+
+.form-msg { font-size: 13px; margin: 6px 0; min-height: 1em; }
+.config-status-actions { gap: 8px; }
+.form-msg.error { color: #dc2626; }
+.form-msg.success { color: #16a34a; }
+.form-msg.warning { color: #b45309; }
+
+.record-table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+.record-table th, .record-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+.record-table tr.editing { outline: 2px solid #2563eb; }
+
+.btn {
+    display: inline-block; padding: 4px 12px; font-size: 14px; cursor: pointer;
+    border-radius: 4px; border: 1px solid transparent; background: #eef1f5;
+}
+.btn-primary { background: #2563eb; color: #ffffff; }
+/* Compact generator button: the column is 48px, so the padding is tighter
+   than the default .btn or the label would not fit. */
+.btn-ros {
+    padding: 3px 6px; font-size: 12px; line-height: 1.2;
+    background: #e6effd; color: #1d4ed8; border-color: #bfd4f7;
+}
+.btn-ros:hover { background: #d6e4fb; }
+.btn-danger { background: #fee2e2; color: #dc2626; }
+
+/* Manual refresh button in the header (icon only, no text). */
+.app-header .btn-refresh {
+    margin-left: auto;
+    background: transparent;
+    color: #ffffff;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    padding: 6px 8px;
+    cursor: pointer;
+}
+.btn-refresh:hover { transform: scale(1.1); }
+.btn-refresh.spinning { animation: spin-refresh 0.8s linear infinite; }
+@keyframes spin-refresh { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* --------------------------------------------------------------- */
+/* Hierarchy tree — groups by AS:COMMUNITY value (variant A)       */
+/* Lazy render: headers + counters only until a group is expanded  */
+/* --------------------------------------------------------------- */
+
+.hierarchy-group { margin-bottom: 4px; }
+.hierarchy-group.editing { outline: 2px solid #2563eb; }
+
+.group-header-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; cursor: pointer; }
+.group-arrow { width: 14px; color: #6b7280; font-size: 12px; }
+.group-name { font-weight: 600; font-size: 14px; }
+.disabled-label { color: #9ca3af; text-decoration: line-through; }
+.group-count { font-size: 12px; color: #6b7280; }
+.group-desc { font-size: 12px; color: #9aa4b2; }
+
+.hierarchy-group.collapsed .group-arrow::before { content: "▸ "; }
+.hierarchy-group.expanded .group-arrow::before { content: "▾ "; }
+.hierarchy-group.collapsed .group-body { display: none; }
+
+.group-body { padding: 2px 16px; }
+
+.network-row { display: flex; align-items: center; gap: 8px; padding: 4px; font-size: 14px; cursor: pointer; border-radius: 4px; }
+.network-row:hover { background: #f1f5f9; }
+.network-row.editing { outline: 2px solid #2563eb; }
+
+
+.inline-edit { display: flex; gap: 6px; align-items: center; padding: 4px; flex-wrap: wrap; background: #f8fafc; border-radius: 4px; margin-bottom: 4px; }
+.inline-edit input, .inline-edit select {
+    padding: 4px 6px; font-size: 13px; border: 1px solid #d0d7de; border-radius: 4px; background: #ffffff;
+}
+.inline-edit label { font-size: 12px; color: #6b7280; }
+
+.add-row-btn { margin-top: 2px; }
+
+/* "Add" form: single row — AS:COMMUNITY select + networks line (R4.2.3). */
+.panel-add .panel-body { display: flex; flex-direction: column; }
+.bulk-form-row { display: flex; gap: 12px; align-items: stretch; flex: 0 0 auto; min-height: 72px; }
+.bulk-col-asc { width: 190px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+.bulk-col-nets { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.bulk-input {
+    width: 100%; flex: 1; min-height: 0; font-family: Consolas, Menlo, monospace; font-size: 13px; padding: 8px;
+    border: 1px solid #d0d7de; border-radius: 4px; resize: none; overflow-x: hidden; white-space: pre-wrap;
+}
+
+/* "Add BGP Peer" panel: fields in a single row on wide screens. */
+.bgp-form-row { display: flex; gap: 12px; flex-wrap: wrap; padding: 2px 0; }
+.bgp-form-row .field { flex: 1; min-width: 150px; }
+.bgp-form-row .field select + input { margin-top: 4px; }
+
+/* Toast layer: every failed request must be visible to the operator. */
+/* Generated RouterOS config: read-only, selectable, never scrolls away. */
+.ros-dialog {
+    width: min(880px, calc(100vw - 48px));
+    max-height: calc(100vh - 96px);
+    padding: 20px 22px;
+    border: 1px solid #d0d7de; border-radius: 8px;
+    background: #ffffff; color: #1f2933;
+}
+.ros-dialog::backdrop { background: rgba(15, 20, 26, 0.55); }
+.ros-title { margin: 0 0 6px; font-size: 16px; }
+.ros-warning { margin: 0 0 12px; font-size: 13px; color: #b45309; }
+.ros-body {
+    margin: 0 0 14px; padding: 12px; max-height: 52vh; overflow: auto;
+    background: #f4f6f8; border: 1px solid #e2e6ea; border-radius: 6px;
+    font-family: Consolas, Menlo, monospace; font-size: 13px; line-height: 1.5;
+    white-space: pre; user-select: text;
+}
+.ros-body:focus { outline: 2px solid #2563eb; outline-offset: -1px; }
+.ros-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Malformed prefixes found while adding networks: the operator picks between
+   the suggested repair and dropping the entry. The table is deliberately not
+   editable, but stays selectable so the list can be copied out. */
+.cidr-dialog {
+    width: min(640px, calc(100vw - 48px));
+    max-height: calc(100vh - 96px);
+    padding: 20px 22px;
+    border: 1px solid #d0d7de; border-radius: 8px;
+    background: #ffffff; color: #1f2933;
+}
+.cidr-dialog::backdrop { background: rgba(15, 20, 26, 0.55); }
+.cidr-title { margin: 0 0 12px; font-size: 16px; }
+.cidr-body {
+    margin: 0 0 10px; max-height: 46vh; overflow: auto;
+    border: 1px solid #e2e6ea; border-radius: 6px;
+    user-select: text; -webkit-user-select: text;
+}
+.cidr-body:focus { outline: 2px solid #2563eb; outline-offset: -1px; }
+.cidr-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cidr-table th, .cidr-table td {
+    padding: 6px 10px; text-align: left;
+    border-bottom: 1px solid #eef1f4;
+    font-family: Consolas, Menlo, monospace;
+    white-space: nowrap;
+}
+.cidr-table th { background: #f4f6f8; font-family: inherit; font-weight: 600; }
+.cidr-table tr:last-child td { border-bottom: none; }
+.cidr-table td.cidr-empty { color: #b45309; }
+.cidr-note { margin: 0 0 12px; font-size: 12px; color: #52606d; min-height: 15px; }
+.cidr-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Chunked bulk import: no way out but the explicit abort button. */
+.bulk-dialog {
+    width: min(420px, calc(100vw - 48px));
+    padding: 20px 22px;
+    border: 1px solid #d0d7de; border-radius: 8px;
+    background: #ffffff; color: #1f2933;
+}
+.bulk-dialog::backdrop { background: rgba(15, 20, 26, 0.55); }
+.bulk-title { margin: 0 0 10px; font-size: 16px; }
+.bulk-phase { margin: 0 0 8px; font-size: 13px; color: #52606d; }
+.bulk-bar { width: 100%; height: 10px; display: block; margin: 0 0 10px; }
+.bulk-note { margin: 0 0 12px; font-size: 12px; color: #b45309; min-height: 15px; }
+.bulk-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.toast-stack {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(420px, calc(100vw - 32px));
+    pointer-events: none;
+}
+.toast {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.35;
+    color: #ffffff;
+    background: #1f2937;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+    opacity: 1;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    overflow-wrap: anywhere;
+}
+.toast-error   { background: #dc2626; }
+.toast-success { background: #16a34a; }
+.toast-warning { background: #f59e0b; color: #1f2933; }
+.toast-info    { background: #1f2937; }
+.toast-hide    { opacity: 0; transform: translateY(6px); }
+
+/* BIRD peers block: service protocols + live BGP session table. */
+.peer-summary { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; font-size: 13px; }
+.peer-service-list { display: grid; gap: 4px; margin-bottom: 10px; }
+.peer-service-row {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) 80px 90px 110px 130px;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    font-size: 13px;
+}
+.peer-service-name { font-family: Consolas, Menlo, monospace; }
+.peer-table-wrap { overflow-x: auto; }
+.peer-table { font-size: 13px; }
+.peer-table th, .peer-table td { white-space: nowrap; }
+.peer-table td.peer-error {
+    color: #dc2626;
+    max-width: 240px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.peer-num { font-family: Consolas, Menlo, monospace; }
+.peer-fsm { color: #6b7280; font-size: 12px; }
+.peer-section-title { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+
+/* Changed files highlight on BIRD tab */
+.config-summary-row.changed { background: #fef08a; }

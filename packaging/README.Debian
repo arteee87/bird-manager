@@ -1,0 +1,211 @@
+bird-manager for Debian
+========================
+
+bird-manager is a Web dashboard for BIRD network, ASN:COMM and BGP peer
+management. SQLite is the only and enforced data source for the BIRD daemon.
+The service renders split BIRD configuration files into staging and publishes
+them only after an explicit Apply.
+
+See the full manual: `man bird-manager`.
+
+Installation layout
+-------------------
+
+  /usr/lib/bird-manager             application code
+  /etc/bird-manager/.env            runtime configuration (conffile)
+  /var/lib/bird-manager/app.db      SQLite database
+  /var/lib/bird-manager/staged      generated staging files
+  /var/lib/bird-manager/backup      full snapshots
+  /etc/bird/live                    live files shared with BIRD
+  /etc/bird/bird.conf               operator config plus stable manager include
+
+The service runs as the dedicated `bird-manager` system user, supplementary
+group `bird`, and can write only `/etc/bird/live` and `/var/lib/bird-manager`.
+The live directory is setgid, so atomic replacements inherit group `bird` for
+BIRD reads. The main BIRD configuration remains read-only to the service. The project uses
+system Python packages and does not ship a virtualenv. BIRD (`bird3`, `bird2` or
+`bird`) must be installed.
+
+Generated files
+---------------
+
+  /etc/bird/live/bird-manager.conf  last applied ordered include list
+  /etc/bird/live/networks.conf       last applied editable base and router id
+  /etc/bird/live/routes.conf         last applied generated static routes
+  /etc/bird/live/core.conf           last applied device/direct/BGP protocols
+  /etc/bird/live/policy_<id>.conf    last applied community policy
+  /var/lib/bird-manager/staged/      current staged candidate
+
+Only `networks.conf` is exposed in the web editor. Database mutations update
+staged files; the live bundle and BIRD are changed only after Apply. Generated
+files are not manually editable. In a reset installation `networks.conf`
+contains only the generated header and router id.
+
+Connecting to BIRD
+------------------
+
+bird-manager keeps one stable marked block in `/etc/bird/bird.conf`:
+
+    include "/etc/bird/live/bird-manager.conf";
+
+The generated entrypoint uses the normal order:
+
+    include "/etc/bird/live/networks.conf";
+    include "/etc/bird/live/policy_<id>.conf";
+    include "/etc/bird/live/routes.conf";
+    include "/etc/bird/live/core.conf";
+
+Apply never writes the main config. The service validates the complete bundle
+with `bird -p` and reloads BIRD with unprivileged `birdc configure`.
+
+For a manual BIRD setup:
+
+    install bird3            # or bird2
+    systemctl enable --now bird
+    birdc show status
+
+If `/etc/bird/bird.conf` is an external configuration, the package asks
+whether to append the stable include. Existing content is preserved and a
+pre-migration backup is kept. If the answer is `No`, runtime Apply remains
+disabled until an administrator completes the migration.
+
+BGP peers
+---------
+
+BGP peers are managed through the web panel and API. Each peer has an identifier
+name, local ASN, neighbor IPv4 and neighbor ASN. Peer reachability routes are
+generated in `routes.conf`; the BGP protocol itself is generated in `core.conf`.
+
+Database behavior
+-----------------
+
+`Network.enabled` and `Community.enabled` are JSON booleans. Disabled networks
+are omitted from routes and policy filters. A community with no enabled
+networks is automatically disabled. Deleting a community deletes all related
+networks and generated policy content.
+
+The Web API has no authentication. The optional `user_id` is recorded in the
+audit log. A failed BIRD reload does not stop the web service: `/api/health`
+returns `degraded` with `reload_warning` and `reload_detail`.
+
+First-time checks
+-----------------
+
+    curl http://127.0.0.1:5000/api/health
+    birdc show status
+    systemctl status bird-manager
+
+On a fresh install, the package creates a minimal `networks.conf`, starts the
+service, and leaves the generated bundle in staging until the first Apply.
+
+Environment overrides
+---------------------
+
+Edit `/etc/bird-manager/.env` to change paths, router id, local ASN or binary
+paths. Package defaults include:
+
+    BIRD_LIVE_DIR=/etc/bird/live
+    BIRD_STAGED_DIR=/var/lib/bird-manager/staged
+    BIRD_BACKUP_RETENTION=5
+    USERNAME=User
+    DB_PATH=/var/lib/bird-manager/app.db
+
+Restart the service after editing:
+
+    systemctl restart bird-manager
+
+`USERNAME` is the identifier written to journal and audit entries. It does not
+grant permissions or access. The default is `User`.
+
+Access control
+--------------
+
+The JSON API has no authentication, so the source allowlist is the only gate in
+front of the BIRD configuration. It is checked before routing and before the
+request body is read.
+
+    BIRD_TRUSTED_SOURCES=auto,127.0.0.1/32,::1/128
+    BIRD_TRUSTED_PROXIES=
+    BIRD_TRUSTED_ORIGINS=
+    BIRD_MAX_BODY_BYTES=1048576
+    BIRD_DEBUG_ERRORS=0
+    APP_HOST=0.0.0.0
+
+- `BIRD_TRUSTED_SOURCES` is a comma separated CIDR list. `auto` resolves to the
+  network of this host's primary IPv4 interface, so the panel is reachable from
+  the local network out of the box. Docker and VPN bridge subnets are never
+  added automatically; add them explicitly if a container must reach the panel.
+- Requests outside the list are answered with `403` and the reason is written to
+  the journal together with the client address.
+- `BIRD_TRUSTED_PROXIES` lists reverse proxies allowed to set
+  `X-Forwarded-For`. While it is empty the header is ignored completely, so a
+  client cannot fake its address.
+- `BIRD_TRUSTED_ORIGINS` lists origins allowed to send `POST`/`PUT`/`DELETE`.
+  When it is set, a mutating request with a missing or foreign `Origin` gets
+  `403`, which blocks cross-site requests from a browser on the same network.
+  `curl` and scripts send no `Origin`, so either add their origin or leave the
+  variable empty.
+- Request bodies larger than `BIRD_MAX_BODY_BYTES` get `413`.
+- Every response carries `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, a strict `Content-Security-Policy` and
+  `Cache-Control: no-store`. 5xx responses return a generic message; the
+  traceback stays in the journal unless `BIRD_DEBUG_ERRORS=1`.
+- The effective policy is printed at service start, so `journalctl -u
+  bird-manager` always shows the current allowlist.
+
+On upgrade the conffile keeps the operator's values; missing keys are reported
+in the install log and the same safe built-in defaults apply.
+
+Example for nginx as the only entry point:
+
+    APP_HOST=127.0.0.1
+    BIRD_TRUSTED_SOURCES=auto,127.0.0.1/32
+    BIRD_TRUSTED_PROXIES=127.0.0.1/32
+    BIRD_TRUSTED_ORIGINS=https://bird.example.net
+
+with
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+All timestamps (journal, audit, backup list, status) use the server machine's
+local timezone. Rollback snapshots are kept in `/var/lib/bird-manager/live-bak`,
+so the BIRD include directory stays free of `*.bak` files.
+
+Backup and restore
+------------------
+
+The Web backup endpoint stores SQLite, staged/live files and the generated-file
+manifest. It keeps a local rotating history controlled by
+`BIRD_BACKUP_RETENTION` (default `5`, valid range `1..99`). The System tab
+shows used/limit slots and one row per archive with restore and delete actions.
+Selected restores are validated with `bird -p` before state is replaced and
+followed by `birdc configure`. The main config is kept in the archive for
+offline recovery but is never restored over the current installation. Legacy
+archives without `bird-manager.conf` synthesize the entrypoint during restore.
+
+Uninstall
+---------
+
+`apt remove bird-manager` asks whether to remove all application data. The
+default is **No**, which keeps the database, backups, environment file and live
+configuration for a later reinstall.
+
+Choosing **Yes** removes:
+
+- `/var/lib/bird-manager` (SQLite, staged files, backups and manifests);
+- `/etc/bird-manager/.env` and the package-owned system account;
+- package-created files in `/etc/bird/live` while preserving unknown files.
+
+Before live files are removed, the managed block in `/etc/bird/bird.conf` is
+replaced inline with the current effective BIRD configuration. The candidate
+must pass `bird -p`; when BIRD is active, `birdc configure` must also succeed.
+On failure the original main file is restored in memory and cleanup is stopped.
+No persistent backup copy of `bird.conf` is created.
+
+`apt purge bird-manager` performs the same full cleanup without asking again.
+Neither command removes the BIRD package, its service or the `bird` group.

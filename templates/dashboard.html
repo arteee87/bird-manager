@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru" id="html-root">
+<head>
+    <meta charset="UTF-8">
+    <title data-i18n="app.title">BIRD Manager — Дашборд</title>
+    <!-- Audit identifier from USERNAME; kept in a meta tag so the page needs no
+         inline script and can be served under a strict Content-Security-Policy. -->
+    <meta name="bird-manager-user" content="{{USERNAME_HTML}}">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <header class="app-header">
+        <span class="app-version" id="app-version">{{VERSION}}</span>
+        <h1>BIRD Manager</h1>
+        <span id="offline-banner" class="banner banner-error hidden" data-i18n="banner.offline">Нет связи с сервером</span>
+        <button type="button" id="refresh-btn" class="btn btn-refresh" title="Обновить активную вкладку" data-i18n-title="btn.refresh">⟳</button>
+    <button type="button" id="lang-toggle-btn" class="btn btn-lang" title="Switch language">RU</button>
+    </header>
+
+    <section class="tabs" aria-label="Разделы bird-manager" data-i18n-aria-label="tabs.ariaLabel">
+        <div class="tab-strip" role="tablist" aria-label="Разделы bird-manager" data-i18n-aria-label="tabs.ariaLabel">
+            <button type="button" class="tab-button active" id="tab-button-networks"
+                    data-tab="networks" role="tab" aria-selected="true"
+                    aria-controls="tab-panel-networks" tabindex="0" data-i18n="tab.networks">Сети</button>
+            <button type="button" class="tab-button" id="tab-button-bird"
+                    data-tab="bird" role="tab" aria-selected="false"
+                    aria-controls="tab-panel-bird" tabindex="-1" data-i18n="tab.bird">BIRD</button>
+            <button type="button" class="tab-button" id="tab-button-system"
+                    data-tab="system" role="tab" aria-selected="false"
+                    aria-controls="tab-panel-system" tabindex="-1" data-i18n="tab.system">Система</button>
+        </div>
+
+        <main class="tab-panels">
+        <section class="tab-panel" id="tab-panel-networks" role="tabpanel"
+                 aria-labelledby="tab-button-networks" data-tab-panel="networks">
+            <div class="tab-stack">
+                <div class="tab-row">
+                    <section class="panel panel-hierarchy" id="panel-networks">
+                        <div class="panel-header">
+                            <div class="panel-header-left">
+                                <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.networks">Сети и сообщества</button>
+                                <span class="panel-count" id="networks-count">…</span>
+                            </div>
+                            <div class="panel-header-right">
+                                <span id="hierarchy-search-count" class="hierarchy-search-count"></span>
+                                <input type="search" id="hierarchy-search" class="hierarchy-search" placeholder="Поиск…" autocomplete="off" data-i18n-placeholder="m171" data-i18n-title="m170" />
+                                <button type="button" id="hierarchy-search-prev" class="btn" disabled>◀</button>
+                                <button type="button" id="hierarchy-search-next" class="btn" disabled>▶</button>
+                            </div>
+                        </div>
+                        <div class="panel-body hidden" id="hierarchy-body"></div>
+                    </section>
+
+                    <section class="panel panel-peers" id="panel-peers">
+                        <div class="panel-header">
+                            <div class="panel-header-left">
+                                <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.peers">BGP peers</button>
+                                <span class="panel-count" id="bgp-peers-count">…</span>
+                            </div>
+                        </div>
+                        <div class="panel-body hidden" id="bgp-peers-body"></div>
+                    </section>
+                </div>
+
+                <section class="panel panel-add" id="panel-bulk">
+                    <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.addNetworks">Добавить сети</button>
+                    <div class="panel-body hidden" id="bulk-body"></div>
+                </section>
+
+                <section class="panel panel-add" id="panel-bgp">
+                    <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.addPeer">Добавить BGP Peer</button>
+                    <div class="panel-body hidden" id="bgp-body"></div>
+                </section>
+            </div>
+        </section>
+
+        <section class="tab-panel" id="tab-panel-bird" role="tabpanel"
+                 aria-labelledby="tab-button-bird" data-tab-panel="bird" hidden>
+            <div class="tab-stack">
+                <section class="panel panel-config-editor" id="panel-config-editor">
+                    <h2 class="panel-title"><span data-i18n="config.title">Конфиг bird</span><span id="diff-count" class="diff-count hidden"></span></h2>
+                    <div class="config-sections" id="config-sections">
+                        <section class="config-section" data-section="networks">
+                            <button type="button" class="config-section-toggle" aria-expanded="false">
+                                <span data-i18n="config.stagedNote">staged/networks.conf — редактируемый, live | staged</span>
+                                <span id="networks-section-count" class="section-count"></span>
+                            </button>
+                            <div class="config-section-body">
+                                <div class="config-editor-panes">
+                                    <div class="diff-scroll" id="diff-scroll">
+                                        <div class="diff-columns">
+                                            <div id="config-errors" class="config-errors"></div>
+                                            <textarea id="active-config" class="config-pane" spellcheck="false" wrap="off"
+                                                      placeholder="Активный конфиг ещё не создан" data-i18n-placeholder="config.placeholder"></textarea>
+                                            <div id="editor-rows" class="row-view row-view-single"
+                                                 aria-label="staged — построчное сравнение с live" data-i18n-aria-label="config.diffAria"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        <section class="config-section" data-section="manager">
+                            <button type="button" class="config-section-toggle" aria-expanded="false">
+                                <span>/etc/bird/live/bird-manager.conf — live | staged</span>
+                                <span id="manager-section-count" class="section-count"></span>
+                            </button>
+                            <div class="config-section-body">
+                                <div id="manager-conf-rows" class="row-view row-view-scroll" hidden></div>
+                                <p class="section-note" id="manager-note" hidden></p>
+                            </div>
+                        </section>
+                        <section class="config-section" data-section="core">
+                            <button type="button" class="config-section-toggle" aria-expanded="false">
+                                <span>/etc/bird/live/core.conf — live | staged</span>
+                                <span id="core-section-count" class="section-count"></span>
+                            </button>
+                            <div class="config-section-body">
+                                <div id="core-rows" class="row-view row-view-scroll" hidden></div>
+                                <p class="section-note" id="core-note" hidden></p>
+                            </div>
+                        </section>
+                        <section class="config-section" data-section="summary">
+                            <button type="button" class="config-section-toggle" aria-expanded="false">
+                                <span data-i18n="config.otherFiles">Остальные файлы — live | staged</span>
+                                <span id="summary-section-count" class="section-count"></span>
+                            </button>
+                            <div class="config-section-body">
+                                <div id="config-summary-body" class="config-summary-body"></div>
+                            </div>
+                        </section>
+                    </div>
+                    <div class="config-actions">
+                        <span id="diff-timer" class="diff-timer" data-i18n="config.updating">обновление: —</span>
+                        <span id="syntax-msg" class="syntax-msg"></span>
+                        <button type="button" id="apply-config-btn" class="btn btn-primary" data-i18n="config.apply">Применить изменения</button>
+                        <span id="config-apply-msg" class="form-msg"></span>
+                    </div>
+                    <div class="config-hint" data-i18n="config.hint">staged-файлы публикуются в live только после «Применить изменения»; сети, сообщества и BGP-пиры управляются базой данных на вкладке «Сети».</div>
+                </section>
+            </div>
+        </section>
+
+        <section class="tab-panel" id="tab-panel-system" role="tabpanel"
+                 aria-labelledby="tab-button-system" data-tab-panel="system" hidden>
+            <div class="tab-stack">
+                <section class="panel panel-bgp-sessions expanded" id="panel-bgp-sessions">
+                    <button type="button" class="panel-toggle" aria-expanded="true" data-i18n="panel.bgpSessions">BGP-сессии</button>
+                    <div class="panel-body" id="bgp-sessions-body"><span class="placeholder" data-i18n="common.loading">Загрузка…</span></div>
+                </section>
+
+                <section class="panel panel-service-protocols" id="panel-service-protocols">
+                    <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.serviceProtocols">Сервисные протоколы</button>
+                    <div class="panel-body hidden" id="service-protocols-body"><span class="placeholder" data-i18n="common.loading">Загрузка…</span></div>
+                </section>
+
+                <section class="panel panel-config-status" id="panel-config-status">
+                    <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.configStatus">Статус конфигурации</button>
+                    <div class="panel-body config-status-scroll hidden" id="config-status-body"><span class="placeholder" data-i18n="common.loading">Загрузка…</span></div>
+                </section>
+
+                <section class="panel panel-backup" id="panel-backup">
+                    <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.backup">Бекап</button>
+                    <div class="panel-body hidden" id="backup-body"><span class="placeholder" data-i18n="common.loading">Загрузка…</span></div>
+                </section>
+
+                <section class="panel panel-audit" id="panel-audit">
+                    <button type="button" class="panel-toggle" aria-expanded="false" data-i18n="panel.audit">Журнал</button>
+                    <div class="panel-body hidden" id="audit-body"><span class="placeholder" data-i18n="common.loading">Загрузка…</span></div>
+                </section>
+            </div>
+        </section>
+        </main>
+    </section>
+
+    <div id="toast-stack" class="toast-stack" role="status" aria-live="polite"></div>
+
+    <!-- RouterOS config for one peer, generated on demand. Nothing is stored:
+         the text is rebuilt from the current peer record every time. -->
+    <dialog id="ros-config" class="ros-dialog">
+        <h2 class="ros-title" id="ros-title" data-i18n="ros.title">Конфиг</h2>
+        <p class="ros-warning" id="ros-warning"></p>
+        <pre class="ros-body" id="ros-body" tabindex="0"></pre>
+        <div class="ros-actions">
+            <button type="button" class="btn btn-primary" id="ros-copy" data-i18n="ros.copy">Копировать</button>
+            <button type="button" class="btn" id="ros-close" data-i18n="ros.close">Закрыть</button>
+        </div>
+    </dialog>
+
+    <!-- Prefixes the parser could not take as they are. The table is
+         read-only but selectable, so the operator can copy the list before
+         choosing. Nothing is written until the choice is confirmed. -->
+    <dialog id="cidr-review" class="cidr-dialog">
+        <h2 class="cidr-title" id="cidr-review-title" data-i18n="cidr.title">Найдены некорректные CIDR. Исправить или удалить?</h2>
+        <div class="cidr-body" id="cidr-review-body" tabindex="0">
+            <table class="cidr-table">
+                <thead>
+                    <tr><th data-i18n="cidr.found">найдено</th><th data-i18n="cidr.fix">исправление</th></tr>
+                </thead>
+                <tbody id="cidr-review-rows"></tbody>
+            </table>
+        </div>
+        <p class="cidr-note" id="cidr-review-note"></p>
+        <div class="cidr-actions">
+            <button type="button" class="btn btn-primary" id="cidr-review-fix" data-i18n="cidr.fixBtn">Исправить</button>
+            <button type="button" class="btn" id="cidr-review-drop" data-i18n="cidr.dropBtn">Удалить</button>
+        </div>
+    </dialog>
+
+    <!-- Bulk import progress. Shown while chunks are in flight; a modal dialog
+         makes the panel inert, so nothing behind it can be touched. The abort
+         button stops the loop — committed chunks stay and a retry is safe. -->
+    <dialog id="bulk-progress" class="bulk-dialog">
+        <h2 class="bulk-title" data-i18n="bulk.title">Импорт сетей</h2>
+        <p class="bulk-phase" id="bulk-progress-label" data-i18n="bulk.phase">Разбор: чанк 1 из 1</p>
+        <progress class="bulk-bar" id="bulk-progress-bar" value="0" max="1"></progress>
+        <p class="bulk-note" id="bulk-progress-note"></p>
+        <div class="bulk-actions">
+            <button type="button" class="btn" id="bulk-progress-cancel" data-i18n="bulk.cancel">Прервать</button>
+        </div>
+    </dialog>
+
+    <script src="/static/js/i18n.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

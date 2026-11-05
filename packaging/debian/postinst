@@ -1,0 +1,267 @@
+#!/bin/sh
+set -eu
+
+if [ -f /usr/share/debconf/confmodule ] && [ -n "${DPKG_MAINTSCRIPT_PACKAGE:-}" ]; then
+    . /usr/share/debconf/confmodule
+else
+    db_input() { :; }
+    db_go() { :; }
+    db_get() { :; }
+    db_set() { :; }
+fi
+
+SERVICE_USER=bird-manager
+SERVICE_GROUP=bird-manager
+BIRD_GROUP=bird
+BIRD_LIVE_DIR=/etc/bird/live
+BIRD_MAIN_CONFIG=/etc/bird/bird.conf
+BIRD_LIVE_CONF=bird-manager.conf
+ENV_FILE=/etc/bird-manager/.env
+
+mkdir -p /etc/bird-manager
+if [ ! -f "$ENV_FILE" ]; then
+    cat > "$ENV_FILE" <<EOF
+DB_PATH=/var/lib/bird-manager/app.db
+BIRD_LIVE_DIR=/etc/bird/live
+BIRD_STAGED_DIR=/var/lib/bird-manager/staged
+BIRD_BACKUP_DIR=/var/lib/bird-manager/backup
+BIRD_BACKUP_RETENTION=5
+BIRD_MAIN_CONFIG=/etc/bird/bird.conf
+# Identifier for user's actions in journal and audit. Does not affect permissions/access.
+USERNAME=User
+# --- Access control -------------------------------------------------------
+# Clients allowed to change the BIRD configuration (CIDR list, comma separated).
+# "auto" is the network of this host's primary IPv4 interface. Docker and VPN
+# bridge subnets are never added automatically - list them explicitly.
+BIRD_TRUSTED_SOURCES=auto,127.0.0.1/32,::1/128
+# Reverse proxies allowed to set X-Forwarded-For. Empty means the header is
+# ignored completely, so a client cannot spoof its address.
+BIRD_TRUSTED_PROXIES=
+# Origins allowed to send POST/PUT/DELETE (exact scheme://host[:port]).
+# Empty disables the Origin check; set it to block cross-site browser requests.
+BIRD_TRUSTED_ORIGINS=
+# Largest accepted request body in bytes; bigger requests get HTTP 413.
+BIRD_MAX_BODY_BYTES=1048576
+# When 1, 5xx responses include the exception text. Keep 0 in production.
+BIRD_DEBUG_ERRORS=0
+# HTTP bind address. 0.0.0.0 keeps the current behaviour; use 127.0.0.1 when a
+# reverse proxy is the only intended entry point.
+APP_HOST=0.0.0.0
+EOF
+fi
+
+# An upgraded conffile keeps the operator's values, so the access-control keys
+# may be missing there. The application then uses the same safe built-in
+# defaults; report them instead of rewriting the conffile (which would make
+# every future upgrade prompt for a merge).
+for key in BIRD_TRUSTED_SOURCES BIRD_TRUSTED_PROXIES BIRD_TRUSTED_ORIGINS \
+           BIRD_MAX_BODY_BYTES BIRD_DEBUG_ERRORS APP_HOST; do
+    if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        echo "bird-manager: $key is not set in $ENV_FILE (built-in default in use)" >&2
+    fi
+done
+
+if [ -f "$ENV_FILE" ]; then
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        case "$key" in
+            \#*|'') continue ;;
+            BIRD_LIVE_DIR) BIRD_LIVE_DIR=$value ;;
+            BIRD_MAIN_CONFIG) BIRD_MAIN_CONFIG=$value ;;
+        esac
+    done < "$ENV_FILE"
+    BIRD_LIVE_DIR=$(printf '%s' "$BIRD_LIVE_DIR" | sed -e 's/^"//' -e 's/"$//')
+    BIRD_MAIN_CONFIG=$(printf '%s' "$BIRD_MAIN_CONFIG" | sed -e 's/^"//' -e 's/"$//')
+fi
+
+mkdir -p /var/lib/bird-manager
+if ! getent group "$BIRD_GROUP" >/dev/null 2>&1; then
+    addgroup --system "$BIRD_GROUP"
+fi
+if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    addgroup --system "$SERVICE_GROUP"
+fi
+if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+    adduser --system --ingroup "$SERVICE_GROUP" --home /nonexistent --no-create-home \
+        --shell /usr/sbin/nologin --disabled-password "$SERVICE_USER"
+    touch /var/lib/bird-manager/.system-user-created
+fi
+usermod -a -G "$BIRD_GROUP" "$SERVICE_USER"
+
+mkdir -p /var/lib/bird-manager/staged /var/lib/bird-manager/backup \
+    /var/lib/bird-manager/live-bak \
+    "$BIRD_LIVE_DIR"
+
+if [ ! -f /var/lib/bird-manager/app.db ]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 /usr/lib/bird-manager/init_db.py
+fi
+
+if [ ! -f "$BIRD_LIVE_DIR/networks.conf" ] || \
+   [ ! -f "$BIRD_LIVE_DIR/routes.conf" ] || \
+   [ ! -f "$BIRD_LIVE_DIR/core.conf" ]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 - "$BIRD_LIVE_DIR" <<'PY'
+import os
+import shutil
+import sys
+import tempfile
+
+sys.path.insert(0, '/usr/lib/bird-manager')
+from app.config_generator import generate_split, render_managed_entrypoint
+
+live = os.path.abspath(sys.argv[1])
+with tempfile.TemporaryDirectory(prefix='bird-manager-seed-') as staged:
+    generate_split(
+        [], [],
+        staged_dir=staged,
+        router_id='auto',
+        local_as=os.getenv('BIRD_LOCAL_AS', '65500'),
+        managed_include_dir=live,
+    )
+    for name in ('networks.conf', 'routes.conf', 'core.conf'):
+        target = os.path.join(live, name)
+        if not os.path.exists(target):
+            shutil.copy2(os.path.join(staged, name), target)
+    entrypoint = os.path.join(live, 'bird-manager.conf')
+    if not os.path.exists(entrypoint):
+        policies = sorted(
+            name for name in os.listdir(live)
+            if name.startswith('policy_') and name.endswith('.conf')
+        )
+        with open(entrypoint, 'w', encoding='utf-8') as stream:
+            stream.write(render_managed_entrypoint(live, policies))
+PY
+fi
+
+if [ ! -f "$BIRD_LIVE_DIR/$BIRD_LIVE_CONF" ]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 - "$BIRD_LIVE_DIR" <<'PY'
+import os
+import re
+import sys
+sys.path.insert(0, '/usr/lib/bird-manager')
+from app.config_generator import render_managed_entrypoint
+live = os.path.abspath(sys.argv[1])
+policies = sorted(
+    (
+        name for name in os.listdir(live)
+        if re.fullmatch(r'policy_\d+\.conf', name)
+    ),
+    key=lambda name: int(name.split('_')[1].split('.')[0]),
+)
+entrypoint = os.path.join(live, 'bird-manager.conf')
+with open(entrypoint, 'w', encoding='utf-8') as stream:
+    stream.write(render_managed_entrypoint(live, policies))
+PY
+fi
+
+MIGRATION_STATUS=external
+if [ ! -f "$BIRD_MAIN_CONFIG" ]; then
+    MIGRATION_STATUS=missing
+else
+    MIGRATION_STATUS=$(PYTHONDONTWRITEBYTECODE=1 python3 - "$BIRD_MAIN_CONFIG" "$BIRD_LIVE_DIR" <<'PY'
+import sys
+sys.path.insert(0, '/usr/lib/bird-manager')
+from app.config_generator import _manager_include_lines, main_config_status
+with open(sys.argv[1], 'r', encoding='utf-8') as stream:
+    content = stream.read()
+valid, _detail = main_config_status(content, sys.argv[2])
+if valid:
+    print('stable')
+elif 'BEGIN bird-manager managed includes' in content or _manager_include_lines(content, sys.argv[2]):
+    print('legacy')
+else:
+    print('external')
+PY
+)
+fi
+
+MIGRATE=false
+case "$MIGRATION_STATUS" in
+    missing|legacy) MIGRATE=true ;;
+    external)
+        db_get bird-manager/append-managed-include || true
+        if [ "$RET" != "true" ] && [ "$RET" != "false" ]; then
+            db_set bird-manager/append-managed-include false
+        fi
+        db_input high bird-manager/append-managed-include || true
+        db_go || true
+        db_get bird-manager/append-managed-include || true
+        [ "$RET" = "true" ] && MIGRATE=true
+        ;;
+esac
+
+BIRD_RELOAD_REQUIRED=false
+if [ "$MIGRATE" = true ]; then
+    mkdir -p "$(dirname "$BIRD_MAIN_CONFIG")"
+    BACKUP_FILE="$BIRD_MAIN_CONFIG.bak-before-managed-entrypoint"
+    if [ -e "$BACKUP_FILE" ]; then
+        BACKUP_FILE="$BACKUP_FILE-$(date +%Y%m%d%H%M%S)"
+    fi
+    if [ -f "$BIRD_MAIN_CONFIG" ]; then
+        cp -p "$BIRD_MAIN_CONFIG" "$BACKUP_FILE"
+    fi
+    CANDIDATE=$(mktemp "$(dirname "$BIRD_MAIN_CONFIG")/.bird.conf.XXXXXX")
+    if [ -f "$BIRD_MAIN_CONFIG" ]; then
+        PYTHONDONTWRITEBYTECODE=1 python3 - "$BIRD_MAIN_CONFIG" "$BIRD_LIVE_DIR" "$CANDIDATE" <<'PY'
+import sys
+sys.path.insert(0, '/usr/lib/bird-manager')
+from app.config_generator import migrate_main_config
+with open(sys.argv[1], 'r', encoding='utf-8') as stream:
+    content = stream.read()
+migrated, _changed = migrate_main_config(content, sys.argv[2])
+with open(sys.argv[3], 'w', encoding='utf-8') as stream:
+    stream.write(migrated)
+PY
+    else
+        PYTHONDONTWRITEBYTECODE=1 python3 - "$BIRD_LIVE_DIR" "$CANDIDATE" <<'PY'
+import sys
+sys.path.insert(0, '/usr/lib/bird-manager')
+from app.config_generator import render_managed_main_block
+with open(sys.argv[2], 'w', encoding='utf-8') as stream:
+    stream.write(render_managed_main_block(sys.argv[1]) + '\n')
+PY
+    fi
+    if command -v bird >/dev/null 2>&1 && ! bird -p -c "$CANDIDATE" >/dev/null 2>&1; then
+        rm -f "$CANDIDATE"
+        echo "bird-manager: ERROR - migrated candidate fails bird -p; main config was not changed" >&2
+        exit 1
+    fi
+    cp "$CANDIDATE" "$BIRD_MAIN_CONFIG"
+    rm -f "$CANDIDATE"
+    if command -v bird >/dev/null 2>&1 && ! bird -p -c "$BIRD_MAIN_CONFIG" >/dev/null 2>&1; then
+        if [ -f "$BACKUP_FILE" ]; then
+            cp -p "$BACKUP_FILE" "$BIRD_MAIN_CONFIG"
+        fi
+        echo "bird-manager: ERROR - committed main config fails bird -p; rollback completed" >&2
+        exit 1
+    fi
+    BIRD_RELOAD_REQUIRED=true
+    echo "bird-manager: migrated $BIRD_MAIN_CONFIG to stable bird-manager.conf include"
+fi
+
+chown -R "$SERVICE_USER:$SERVICE_GROUP" /var/lib/bird-manager
+chmod 0750 /var/lib/bird-manager /var/lib/bird-manager/staged \
+    /var/lib/bird-manager/backup \
+    /var/lib/bird-manager/live-bak
+chown -R "$SERVICE_USER:$BIRD_GROUP" "$BIRD_LIVE_DIR"
+find "$BIRD_LIVE_DIR" -type d -exec chmod 2750 {} \;
+find "$BIRD_LIVE_DIR" -type f -exec chmod 0640 {} \;
+
+if [ "$BIRD_RELOAD_REQUIRED" = true ] && command -v birdc >/dev/null 2>&1; then
+    if command -v runuser >/dev/null 2>&1; then
+        if ! runuser -u "$SERVICE_USER" -- birdc configure >/dev/null; then
+            echo "bird-manager: WARNING - birdc configure failed; validated config remains installed" >&2
+        fi
+    elif ! birdc configure >/dev/null; then
+        echo "bird-manager: WARNING - birdc configure failed; validated config remains installed" >&2
+    fi
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable bird-manager.service >/dev/null 2>&1
+    systemctl restart bird-manager.service
+    if [ "$BIRD_RELOAD_REQUIRED" = true ]; then
+        systemctl is-active --quiet bird.service || systemctl enable --now bird.service
+    fi
+fi
+
+exit 0

@@ -1,0 +1,51 @@
+# Environment / local config
+.env
+.creds
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+dist/.last_version
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime data (SQLite DB, backups, logs)
+data/
+logs/
+
+# Runtime BIRD config (generated, not source)
+bird-manager.conf
+bird.conf
+core.conf
+routes_*.conf
+export_*.conf
+networks.conf
+config/live/
+config/staged/
+live/
+staged/
+
+# Screenshots and local notes
+*.png
+*.jpg
+*.jpeg
+*.gif
+Снимок*
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
