@@ -68,7 +68,7 @@ scripts/build-deb.sh --help          # полная справка (печата
 за полный прогон. Проверять стоит самому:
 
 ```sh
-python3 -m pytest -q          # 282 теста
+python3 -m pytest -q          # 283 теста
 node --check static/js/app.js # синтаксис фронтенда
 ```
 

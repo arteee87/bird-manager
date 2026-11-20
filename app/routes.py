@@ -731,16 +731,27 @@ def _listen_address():
 
 
 def _serve_with_timeout(host=None, port=5000, timeout_sec=10):
-    """Serve the app for a limited time, then shut down gracefully."""
-    def _shutdown(signum=None, frame=None):
-        sys.exit(0)
+    """Serve the app for a limited time, then shut down gracefully.
+
+    ``waitress.serve`` blocks forever, and ``sys.exit`` raised in a timer
+    thread only terminates that thread, so the previous implementation never
+    actually stopped the server. We use the lower-level server object and
+    ``close()`` it from the timer instead.
+    """
+    import waitress
+
+    server = waitress.create_server(app, host=host or _listen_address(), port=port)
+
+    def _shutdown():
+        server.close()
 
     timer = threading.Timer(timeout_sec, _shutdown)
     timer.daemon = True
     timer.start()
-
-    import waitress
-    waitress.serve(app, host=host or _listen_address(), port=port)
+    try:
+        server.run()
+    finally:
+        timer.cancel()
 
 
 if __name__ == '__main__':
