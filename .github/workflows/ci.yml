@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      # The JS tests skip themselves when node is missing; install it so
+      # they actually run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Several tests hardcode /usr/sbin/bird; bird2 from Ubuntu universe
+      # provides that path. birdc is mocked by the tests themselves.
+      - name: Install BIRD
+        run: sudo apt-get update && sudo apt-get install -y bird2
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: JS syntax check
+        run: |
+          node --check static/js/app.js
+          node --check static/js/i18n.js
