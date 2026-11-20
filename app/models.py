@@ -167,6 +167,15 @@ def ensure_schema(engine):
                 flush=True,
             )
             raise
+        # Indexes on hot columns (additive; idempotent).
+        for stmt in (
+            'CREATE INDEX IF NOT EXISTS ix_networks_prefix ON networks(prefix)',
+            'CREATE INDEX IF NOT EXISTS ix_networks_status ON networks(status)',
+            'CREATE INDEX IF NOT EXISTS ix_communities_name ON communities(name)',
+            'CREATE INDEX IF NOT EXISTS ix_audit_log_timestamp ON audit_log(timestamp)',
+        ):
+            connection.execute(text(stmt))
+
         try:
             _materialise_community_values(connection)
         except Exception as exc:
@@ -182,9 +191,9 @@ class Network(Base):
     __tablename__ = 'networks'
 
     id = Column(Integer, primary_key=True)
-    prefix = Column(String(255), nullable=False)
+    prefix = Column(String(255), nullable=False, index=True)
     description = Column(Text)
-    status = Column(String(50))
+    status = Column(String(50), index=True)
     community_ids = Column(Text)  # Stored as comma-separated string or JSON
     enabled = Column(Boolean, nullable=False, default=True, server_default=text('1'))
 
@@ -193,7 +202,7 @@ class Community(Base):
     __tablename__ = 'communities'
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False, index=True)
     values = Column(Text)
     description = Column(Text)
     enabled = Column(Boolean, nullable=False, default=True, server_default=text('1'))
@@ -204,7 +213,7 @@ class AuditLog(Base):
 
     id = Column(Integer, primary_key=True)
     action = Column(String(100))
-    timestamp = Column(DateTime, default=local_now)
+    timestamp = Column(DateTime, default=local_now, index=True)
     user_id = Column(String(50))
     diff_summary = Column(Text)
 

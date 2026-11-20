@@ -1753,7 +1753,7 @@ def _restore_backup_request(request, backup_id=None):
         try:
             result = restore_backup(_LIVE_PATH, _STAGED_PATH, _DB_PATH, backup_id=backup_id)
         except ValueError as exc:
-            return {'error': str(exc), 'status': 'error', 'code': 'restore_error'}, 400
+            return {'error': str(exc), 'status': 'error', 'code': 'invalid_backup_id'}, 400
         if result['status'] != 'success':
             return result, 400
         ensure_schema(engine)
@@ -1765,6 +1765,7 @@ def _restore_backup_request(request, backup_id=None):
         return {
             'status': 'success',
             'message': result['message'],
+            'code': result.get('code'),
             'reload_warning': reload_warning,
             'reload_detail': reload_detail,
             'backup': backup_info(_DB_PATH),
@@ -1793,7 +1794,7 @@ def backup_delete(request):
         backup_id = request.path.rsplit('/', 1)[-1]
         result = delete_backup(backup_id, _DB_PATH)
     except ValueError as exc:
-        return {'error': str(exc), 'status': 'error', 'code': 'restore_error'}, 400
+        return {'error': str(exc), 'status': 'error', 'code': 'invalid_backup_id'}, 400
     if result['status'] != 'success':
         return result, 404
     data = request.body_data if request.body_data else {}

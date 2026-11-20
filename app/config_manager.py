@@ -552,7 +552,7 @@ class ConfigManager:
         """Validate the complete generated BIRD bundle, not only networks.conf."""
         expected_entrypoint = render_managed_entrypoint(
             self.live_path,
-            self._policy_filenames(self.live_path),
+            self._policy_filenames(self.staged_path),
             self._community_keys(self.staged_path),
             self._export_peer_keys(self.staged_path),
             self._has_combined_export(self.staged_path),
@@ -647,7 +647,7 @@ class ConfigManager:
 
         expected_entrypoint = render_managed_entrypoint(
             self.live_path,
-            self._policy_filenames(self.live_path),
+            self._policy_filenames(self.staged_path),
             self._community_keys(self.staged_path),
             self._export_peer_keys(self.staged_path),
             self._has_combined_export(self.staged_path),

@@ -209,7 +209,7 @@ class ParsingEngine:
         """
         text = (token or '').strip().strip('"\'')
         if not text:
-            return {'status': 'unfixable', 'suggestion': '', 'reason': 'пустое значение'}
+            return {'status': 'unfixable', 'suggestion': '', 'reason': 'пустое значение', 'code': 'empty_value'}
 
         bare = BARE_IPV4_PATTERN.match(text)
         if bare:
@@ -217,42 +217,42 @@ class ParsingEngine:
                 ip_network(text, strict=False)
             except ValueError:
                 return {'status': 'unfixable', 'suggestion': '',
-                        'reason': 'некорректный адрес'}
+                        'reason': 'некорректный адрес', 'code': 'invalid_address'}
             return {'status': 'fixable',
                     'suggestion': f'{text}/{IPV4_MAX_PREFIXLEN}',
-                    'reason': 'не указана длина маски'}
+                    'reason': 'не указана длина маски', 'code': 'missing_mask'}
 
         if not CIDR_PATTERN.fullmatch(text):
-            return {'status': 'unfixable', 'suggestion': '', 'reason': 'не префикс сети'}
+            return {'status': 'unfixable', 'suggestion': '', 'reason': 'не префикс сети', 'code': 'not_a_prefix'}
 
         address, _, mask = text.partition('/')
         try:
             ip_network(address, strict=True)
         except ValueError:
             return {'status': 'unfixable', 'suggestion': '',
-                    'reason': 'некорректный адрес'}
+                    'reason': 'некорректный адрес', 'code': 'invalid_address'}
 
         try:
             length = int(mask)
         except ValueError:
             return {'status': 'unfixable', 'suggestion': '',
-                    'reason': 'некорректная длина маски'}
+                    'reason': 'некорректная длина маски', 'code': 'invalid_mask_length'}
         if length < 0 or length > IPV4_MAX_PREFIXLEN:
             # BIRD only knows /0../32, so a host route is the nearest
             # thing the operator can have meant.
             return {'status': 'fixable',
                     'suggestion': f'{address}/{IPV4_MAX_PREFIXLEN}',
-                    'reason': 'недопустимая длина маски'}
+                    'reason': 'недопустимая длина маски', 'code': 'invalid_mask_length'}
 
         try:
             canonical = str(ip_network(text, strict=False))
         except ValueError:
             return {'status': 'unfixable', 'suggestion': '',
-                    'reason': 'некорректный префикс'}
+                    'reason': 'некорректный префикс', 'code': 'invalid_prefix'}
         if canonical == text:
             return {'status': 'valid', 'suggestion': text, 'reason': ''}
         return {'status': 'fixable', 'suggestion': canonical,
-                'reason': 'установлены биты хоста'}
+                'reason': 'установлены биты хоста', 'code': 'host_bits_set'}
 
     def canonical_prefix(self, prefix):
         """Return the canonical form of *prefix*, or ``None`` if impossible.

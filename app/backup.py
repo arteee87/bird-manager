@@ -111,11 +111,12 @@ def resolve_backup_path(backup_id, db_path):
 def delete_backup(backup_id, db_path):
     path = resolve_backup_path(backup_id, db_path)
     if path is None:
-        return {'status': 'error', 'message': 'Бекап не найден'}
+        return {'status': 'error', 'message': 'Бекап не найден', 'code': 'backup_not_found'}
     os.unlink(path)
     return {
         'status': 'success',
         'message': 'Бекап удалён',
+        'code': 'backup_deleted',
         'backup': backup_info(db_path),
     }
 
@@ -392,11 +393,11 @@ def restore_backup(live_path, staged_path, db_path, backup_id=None):
     if backup_id is None:
         items = _backup_items(db_path)
         if not items:
-            return {'status': 'error', 'message': 'Полный бекап не найден — сначала сделайте его'}
+            return {'status': 'error', 'message': 'Полный бекап не найден — сначала сделайте его', 'code': 'backup_not_found'}
         backup_id = items[0]['id']
     path = resolve_backup_path(backup_id, db_path)
     if path is None:
-        return {'status': 'error', 'message': 'Выбранный бекап не найден'}
+        return {'status': 'error', 'message': 'Выбранный бекап не найден', 'code': 'backup_not_found'}
 
     main_text = None
     main_path = backup_paths.main_config_path()
@@ -410,6 +411,7 @@ def restore_backup(live_path, staged_path, db_path, backup_id=None):
         return {
             'status': 'error',
             'message': f'Миграция /etc/bird/bird.conf требуется перед restore: {detail}',
+            'code': 'backup_migration_required',
         }
 
     with tempfile.TemporaryDirectory(prefix='bm-restore-') as tmp:
@@ -421,7 +423,7 @@ def restore_backup(live_path, staged_path, db_path, backup_id=None):
                 for prefix in ('db/', 'staged/', 'live/', 'state/', 'main/')
             )
             if not has_any:
-                return {'status': 'error', 'message': 'Бекап повреждён или имеет неизвестный формат'}
+                return {'status': 'error', 'message': 'Бекап повреждён или имеет неизвестный формат', 'code': 'backup_corrupt'}
             tar.extractall(tmp, filter='data')
 
         _ensure_legacy_entrypoint(tmp, live_path)
@@ -430,6 +432,7 @@ def restore_backup(live_path, staged_path, db_path, backup_id=None):
             return {
                 'status': 'error',
                 'message': f'Бекап не проходит BIRD validation: {detail}',
+                'code': 'backup_validation_failed',
             }
         db_dir = os.path.dirname(db_path)
         if db_dir:
@@ -444,4 +447,4 @@ def restore_backup(live_path, staged_path, db_path, backup_id=None):
         _restore_tree(tmp, 'live', live_path)
         _restore_manifest(tmp, backup_paths.manifest_path(live_path))
 
-    return {'status': 'success', 'message': 'Полный бекап восстановлен'}
+    return {'status': 'success', 'message': 'Полный бекап восстановлен', 'code': 'backup_restored'}

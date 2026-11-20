@@ -2239,6 +2239,15 @@ async function createBackupSnapshot() {
     backupMsg(text, kind);
 }
 
+function backendMessage(data, fallback) {
+    const codeKey = data && data.code ? ('err.' + data.code) : null;
+    let detail = codeKey ? t(codeKey, data) : null;
+    if (!detail || detail === codeKey || /\{[a-zA-Z_]+\}/.test(detail)) {
+        detail = data && (data.error || data.message);
+    }
+    return detail || fallback || '';
+}
+
 async function restoreBackupSnapshot(backupId, displayTime) {
     if (!window.confirm(t('m096') + displayTime + t('m097'))) return;
     backupMsg(t('m140') + displayTime + '…', '');
@@ -2252,10 +2261,10 @@ async function restoreBackupSnapshot(backupId, displayTime) {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status === 'error') {
-            text = data.error || data.message || t('m128');
+            text = backendMessage(data, t('m128'));
             kind = 'error';
         } else {
-            text = data.message || t('m133');
+            text = backendMessage(data, t('m133'));
             kind = 'success';
         }
     } catch (e) {
@@ -2281,7 +2290,7 @@ async function deleteBackupSnapshot(backupId, displayTime) {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status === 'error') {
-            text = data.error || data.message || t('m125');
+            text = backendMessage(data, t('m125'));
             kind = 'error';
         } else {
             text = data.message || t('m148');

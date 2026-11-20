@@ -32,18 +32,6 @@ from app.config_generator import GHOST_MARKER
 from app.models import Base, BgpPeer, Community, Network, ensure_schema
 
 
-@pytest.fixture
-def db_session(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}")
-    ensure_schema(engine)
-    session = sessionmaker(bind=engine)()
-    try:
-        yield session
-    finally:
-        session.close()
-        Base.metadata.drop_all(engine)
-
-
 def test_enabled_defaults_and_crud_cascade(db_session):
     community = CRUDOperations.create_community(
         db_session, name='65500:102', values='', description='test', enabled=True
@@ -3529,6 +3517,28 @@ def test_api_doc_include_order_matches_generator():
     # legacy-order check above.
 
 
+def test_backend_error_codes_have_i18n_keys():
+    """Every 'code' returned by the backend must have an err.<code> key in i18n.js."""
+    import re
+
+    i18n_src = open('static/js/i18n.js', encoding='utf-8').read()
+
+    backend_codes = set()
+    for path in ('app/routes.py', 'app/backup.py', 'app/parsing_engine.py'):
+        src = open(path, encoding='utf-8').read()
+        backend_codes.update(re.findall(r"'code':\s*'([a-z_]+)'", src))
+
+    validator_src = open('app/validators.py', encoding='utf-8').read()
+    i18n_keys = set(re.findall(r'"(err\.[a-z_]+)"', i18n_src))
+    i18n_codes = {k.split('.', 1)[1] for k in i18n_keys}
+    for code in re.findall(r"'([a-z_]+)'", validator_src):
+        if code in i18n_codes:
+            backend_codes.add(code)
+
+    missing = sorted(c for c in backend_codes if ('err.' + c) not in i18n_keys)
+    assert not missing, 'backend codes without i18n key: %r' % missing
+
+
 def test_api_doc_matches_live_response_fields():
     """Documented response fields must exist in the real payload."""
     doc = _api_doc()
@@ -3653,13 +3663,6 @@ def _request_status(request, method, path, payload=None):
             return err.code, json.loads(body)
         except ValueError:
             return err.code, {}
-
-
-@pytest.fixture
-def parser():
-    from app.parsing_engine import ParsingEngine
-
-    return ParsingEngine()
 
 
 @pytest.mark.parametrize('raw,expected', [
