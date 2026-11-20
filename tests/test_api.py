@@ -3472,11 +3472,14 @@ def _api_doc():
 
 
 def test_api_doc_lists_every_registered_route():
-    """Every @route in app/routes.py must appear in the API documentation."""
+    """Every @route in app/routes.py and the api_* modules must appear in the API docs."""
+    import glob
     import re
 
-    with open('app/routes.py', 'r', encoding='utf-8') as stream:
-        source = stream.read()
+    source = ''
+    for path in ['app/routes.py'] + sorted(glob.glob('app/api_*.py')):
+        with open(path, 'r', encoding='utf-8') as stream:
+            source += stream.read()
 
     def normalise(path):
         return re.sub(r'<(?:int:|string:|name:)(\w+)>', r'<\1>', path)
@@ -3484,7 +3487,7 @@ def test_api_doc_lists_every_registered_route():
     routes = {
         (method, normalise(path))
         for path, method in re.findall(
-            r"@route\('([^']+)', method='([A-Z]+)'\)", source
+            r"@(?:ctx\.)?route\('([^']+)', method='([A-Z]+)'\)", source
         )
     }
     doc = _api_doc()
@@ -3524,7 +3527,10 @@ def test_backend_error_codes_have_i18n_keys():
     i18n_src = open('static/js/i18n.js', encoding='utf-8').read()
 
     backend_codes = set()
-    for path in ('app/routes.py', 'app/backup.py', 'app/parsing_engine.py'):
+    import glob
+    scan_paths = ['app/routes.py', 'app/backup.py', 'app/parsing_engine.py']
+    scan_paths += sorted(glob.glob('app/api_*.py'))
+    for path in scan_paths:
         src = open(path, encoding='utf-8').read()
         backend_codes.update(re.findall(r"'code':\s*'([a-z_]+)'", src))
 

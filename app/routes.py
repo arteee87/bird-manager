@@ -1,4 +1,11 @@
-"""WSGI API routes for bird-manager using waitress."""
+"""WSGI entry point, access control and facade for bird-manager.
+
+Runtime state and helpers live in context.py; the API handlers live in the
+api_* modules (registered on import below). This module keeps the WSGI
+plumbing, the access gate, the handlers pinned here by source-level tests
+(dashboard, static, config preview, peers list) and the historical
+app.routes namespace via re-exports.
+"""
 
 import gzip
 import json
@@ -10,73 +17,36 @@ import re
 import shutil
 import subprocess
 import tempfile
-import traceback
 import ipaddress
 import html
-from datetime import datetime
 from urllib.parse import parse_qs, unquote
 
 
 # Conditional imports — work both as package and as script entry point
 try:
-    from .crud_operations import CRUDOperations
-    from .models import Community
-    from .database import (
-        close_all_sessions,
-    )
-    from .parsing_engine import ParsingEngine
+    from .models import AuditLog, BgpPeer, ensure_schema
+    from .database import close_all_sessions
     from .config_generator import (
-        generate_split,
-        is_bundle_filename,
         _as_community_ids,
         detect_router_id,
-        prefix_pairs_by_asn,
         _peer_local_asn,
         _resolve_router_id,
-        _effective_values,
-        _community_pairs,
     )
-    from .diff_engine import DiffEngine
     from .syntax_validator import SyntaxValidator
-    from .config_manager import ConfigManager
-    from .validators import (
-        Validator, derive_community_values,
-        validate_community_name, validate_community_ref,
-    )
-    from .models import AuditLog, Base, BgpPeer, ensure_schema
-    from .backup import backup_info, create_backup, delete_backup, restore_backup
-    from sqlalchemy.exc import IntegrityError
     _package_mode = True
 except ImportError:
     _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _parent_dir not in sys.path:
         sys.path.insert(0, _parent_dir)
-    from crud_operations import CRUDOperations
-    from database import (
-        close_all_sessions,
-    )
-    from parsing_engine import ParsingEngine
+    from models import AuditLog, BgpPeer, ensure_schema
+    from database import close_all_sessions
     from config_generator import (
-        generate_split,
-        is_bundle_filename,
         _as_community_ids,
         detect_router_id,
-        prefix_pairs_by_asn,
         _peer_local_asn,
         _resolve_router_id,
-        _effective_values,
-        _community_pairs,
     )
-    from diff_engine import DiffEngine
     from syntax_validator import SyntaxValidator
-    from config_manager import ConfigManager
-    from validators import (
-        Validator, derive_community_values,
-        validate_community_name, validate_community_ref,
-    )
-    from models import AuditLog, Base, BgpPeer, ensure_schema
-    from backup import backup_info, create_backup, delete_backup, restore_backup
-    from sqlalchemy.exc import IntegrityError
     _package_mode = False
 
 # Shared runtime state and helpers live in context.py. The re-exports keep
@@ -217,8 +187,6 @@ SECURITY_HEADERS = (
 # Parsed allowlists are cached per raw env string so a reload is cheap while
 # tests can still override the environment between calls.
 _NETWORK_CACHE = {}
-
-
 
 
 def _int_env(name, default):
@@ -369,8 +337,6 @@ def _body_too_large(environ, max_body):
     except ValueError:
         return False
     return length > max_body
-
-
 
 
 def _log_access_settings(settings):
@@ -538,8 +504,6 @@ def _create_wsgi_app():
     return wsgi_app
 
 
-
-
 # Project root = parent of the app/ package directory.
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_DIR = os.path.join(_APP_ROOT, 'templates')
@@ -602,24 +566,6 @@ def serve_static(request):
 
 
 # --- Configuration Management Routes ---
-
-@route('/api/config/live', method='GET')
-def get_config_live(request):
-    """GET /api/config/live — return the live config file content."""
-    try:
-        filename = (request.args.get('filename') or ['networks.conf'])[0]
-        if not _is_editable_config(filename):
-            return {'error': 'Only networks.conf is editable', 'code': 'editable_only_networks_conf'}, 400
-        live_file = os.path.join(_LIVE_PATH, filename)
-        if not os.path.exists(live_file):
-            return {'content': None, 'filename': filename}, 200
-        # Explicit UTF-8, and a read failure reported as such: this endpoint
-        # feeds the editor, so an undecodable file must not surface as a 500.
-        with open(live_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        return {'content': content, 'filename': filename}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
 
 
 @route('/api/config/preview', method='POST')
@@ -720,384 +666,7 @@ def preview_config(request):
         return {'error': _error_message(e), 'code': 'server_error'}, 500
 
 
-@route('/api/config/overview', method='GET')
-def get_config_overview(request):
-    """GET /api/config/overview — return the multi-file config panel model."""
-    try:
-        return config_manager.get_config_overview(), 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
 # --- Existing routes below ---
-
-@route('/api/networks', method='GET')
-def get_networks(request):
-    """Get all networks from the database."""
-    try:
-        session = get_session()
-        networks = crud.get_networks(session)
-        network_list = [{
-            'id': net.id, 'prefix': net.prefix, 'description': net.description,
-            'status': net.status, 'community_ids': net.community_ids,
-            'enabled': net.enabled,
-        } for net in networks]
-        return {'networks': network_list, 'count': len(network_list)}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/networks/count', method='GET')
-def get_network_count(request):
-    """Get the number of network records without returning their data.
-
-    Used by the dashboard to show collapsed lists: only the count is
-    loaded on startup, list contents are fetched lazily on expand.
-    """
-    try:
-        session = get_session()
-        count = crud.count_networks(session)
-        return {'count': count}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-def _prefix_review(prefix):
-    """Build the 409 body for a prefix that is not already canonical.
-
-    Returns ``None`` when the prefix is fine and the caller may proceed. The
-    same shape is used by both the bulk parser and the single-record routes so
-    the dialog is driven by one contract.
-    """
-    verdict = parser.classify_token(prefix)
-    if verdict['status'] == 'valid':
-        return None
-    return {
-        'error': 'Некорректный префикс',
-        'code': 'invalid_prefix',
-        'needs_confirmation': True,
-        'invalid': [{
-            'input': (prefix or '').strip(),
-            'suggestion': verdict['suggestion'],
-            'reason': verdict['reason'],
-        }],
-    }
-
-
-@route('/api/networks', method='POST')
-def create_network(request):
-    """Create a new network record."""
-    try:
-        data = request.body_data if request.body_data else {}
-        if not data or 'prefix' not in data:
-            return {'error': 'Missing required field: prefix', 'code': 'missing_prefix'}, 400
-        if 'enabled' in data and not isinstance(data['enabled'], bool):
-            return {'error': 'enabled must be a boolean', 'code': 'enabled_not_boolean'}, 400
-
-        review = _prefix_review(data['prefix'])
-        if review is not None:
-            return review, 409
-
-        session = get_session()
-        network = crud.create_network(
-            session=session,
-            prefix=data['prefix'],
-            description=data.get('description', ''),
-            status=data.get('status', 'pending'),
-            community_ids=data.get('community_ids'),
-            enabled=data.get('enabled', True),
-        )
-        _regenerate_staged(session)
-        return {'network': {
-            'id': network.id, 'prefix': network.prefix, 'description': network.description,
-            'status': network.status, 'community_ids': network.community_ids,
-            'enabled': network.enabled,
-        }}, 201
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/networks/<int:network_id>', method='PUT')
-def update_network(request):
-    """Update an existing network record."""
-    try:
-        data = request.body_data if request.body_data else {}
-        if 'enabled' in data and not isinstance(data['enabled'], bool):
-            return {'error': 'enabled must be a boolean', 'code': 'enabled_not_boolean'}, 400
-        if 'prefix' in data:
-            review = _prefix_review(data['prefix'])
-            if review is not None:
-                return review, 409
-        network_id = int(request.path.split('/')[-1])
-
-        session = get_session()
-        existing = crud.get_network_by_id(session, network_id)
-        if not existing:
-            return {'error': 'Network not found', 'code': 'network_not_found'}, 404
-
-        network = crud.update_network(session=session, network_id=network_id, **data)
-        if network:
-            _regenerate_staged(session)
-            return {'network': {
-                'id': network.id, 'prefix': network.prefix, 'description': network.description,
-                'status': network.status, 'community_ids': network.community_ids,
-                'enabled': network.enabled,
-            }}, 200
-        return {'error': 'Network not found', 'code': 'network_not_found'}, 404
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/networks/<int:network_id>', method='DELETE')
-def delete_network(request):
-    """Delete a network record."""
-    try:
-        network_id = int(request.path.split('/')[-1])
-
-        session = get_session()
-        existing = crud.get_network_by_id(session, network_id)
-        if not existing:
-            return {'error': 'Network not found', 'code': 'network_not_found'}, 404
-
-        network = crud.delete_network(session=session, network_id=network_id)
-        if network:
-            _regenerate_staged(session)
-            return {
-                'message': 'Network deleted',
-                'network': {'id': network.id, 'prefix': network.prefix},
-            }, 200
-        return {'error': 'Network not found', 'code': 'network_not_found'}, 404
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/networks/bulk', method='POST')
-def bulk_import_networks(request):
-    """Bulk import networks from various input formats.
-
-    The parser splits the batch in two: prefixes that are already canonical
-    come back in ``parsed_networks``, everything else in ``invalid`` as
-    ``{'input', 'suggestion', 'reason'}`` entries. The client shows those in
-    the CIDR review dialog and either re-sends the suggestions or drops them;
-    nothing is written by this call.
-    """
-    try:
-        data = request.body_data if request.body_data else {}
-        raw_data = data.get('raw_data', [])
-        input_format = data.get('format', 'text')
-
-        result = parser.parse_and_map(raw_data, input_format=input_format)
-        return {
-            'parsed_networks': result['networks'],
-            'parsed_communities': result['communities'],
-            'invalid': result['invalid'],
-        }, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/networks/bulk/commit', method='POST')
-def bulk_commit_networks(request):
-    """Commit already-parsed networks to the database with deduplication.
-
-    Accepts the output of POST /api/networks/bulk (parse_and_map) and
-    persists only new records; duplicates by prefix are skipped.
-    """
-    try:
-        data = request.body_data if request.body_data else {}
-        networks = data.get('networks', [])
-        user_id = data.get('user_id', 'system')
-
-        if not isinstance(networks, list) or len(networks) == 0:
-            return {'error': 'Empty network list', 'code': 'empty_network_list'}, 400
-
-        session = get_session()
-        result = crud.bulk_commit_networks(session=session, networks=networks, user_id=user_id)
-        _regenerate_staged(session)
-        return {
-            'created': result['created'],
-            'skipped_duplicates': result['skipped_duplicates'],
-            'skipped_invalid': result.get('skipped_invalid', 0),
-            'audit_id': result['audit_id'],
-        }, 201
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/communities', method='GET')
-def get_communities(request):
-    """Get all communities from the database."""
-    try:
-        session = get_session()
-        communities = crud.get_communities(session)
-        community_list = [{
-            'id': comm.id, 'name': comm.name, 'values': comm.values, 'description': comm.description,
-            'enabled': comm.enabled,
-        } for comm in communities]
-        return {'communities': community_list, 'count': len(community_list)}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/communities/count', method='GET')
-def get_community_count(request):
-    """Get the number of community records without returning their data.
-
-    Used by the dashboard to show collapsed lists: only the count is
-    loaded on startup, list contents are fetched lazily on expand.
-    """
-    try:
-        session = get_session()
-        count = crud.count_communities(session)
-        return {'count': count}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/communities', method='POST')
-def create_community(request):
-    """Create a new community record.
-
-    The name is the source of truth for the community values: it is validated
-    as ``ASN:VALUE`` or a bare ``ASN``, and when the caller supplies no
-    ``values`` the name's own value is stored so later renames cannot silently
-    change what a prefix is tagged with.
-    """
-    try:
-        data = request.body_data if request.body_data else {}
-        if not data or 'name' not in data:
-            return {'error': 'Missing required field: name', 'code': 'missing_name'}, 400
-        if 'enabled' in data and not isinstance(data['enabled'], bool):
-            return {'error': 'enabled must be a boolean', 'code': 'enabled_not_boolean'}, 400
-
-        name, derived, error, code = validate_community_name(data['name'])
-        if error:
-            return {'error': error, 'code': code}, 400
-
-        raw_values = data.get('values')
-        if raw_values is not None and str(raw_values).strip():
-            values, error, code = validate_community_ref(raw_values)
-            if error:
-                return {'error': error, 'code': code}, 400
-        else:
-            values = derived
-
-        session = get_session()
-        if name == '65534':
-            community = crud.ensure_default_community(session)
-            _regenerate_staged(session)
-            return {'community': {
-                'id': community.id, 'name': community.name, 'values': community.values, 'description': community.description,
-                'enabled': community.enabled,
-            }}, 200
-        existing = session.query(Community).filter(Community.name == name).first()
-        if existing is not None:
-            _regenerate_staged(session)
-            return {'community': {
-                'id': existing.id, 'name': existing.name, 'values': existing.values, 'description': existing.description,
-                'enabled': existing.enabled,
-            }}, 200
-        community = crud.create_community(
-            session=session,
-            name=name,
-            values=values,
-            description=data.get('description', ''),
-            enabled=data.get('enabled', True),
-        )
-        _regenerate_staged(session)
-        return {'community': {
-            'id': community.id, 'name': community.name, 'values': community.values, 'description': community.description,
-            'enabled': community.enabled,
-        }}, 201
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/communities/<int:community_id>', method='PUT')
-def update_community(request):
-    """Update an existing community record.
-
-    A renamed community keeps its values only when they were derived from the
-    old name: then they are re-derived from the new one, because they carry no
-    information of their own. A value the operator set explicitly, or a list of
-    them, is left alone.
-    """
-    try:
-        data = request.body_data if request.body_data else {}
-        if 'enabled' in data and not isinstance(data['enabled'], bool):
-            return {'error': 'enabled must be a boolean', 'code': 'enabled_not_boolean'}, 400
-        community_id = int(request.path.split('/')[-1])
-
-        session = get_session()
-        existing = crud.get_community_by_id(session, community_id)
-        if not existing:
-            return {'error': 'Community not found', 'code': 'community_not_found'}, 404
-
-        updates = dict(data)
-
-        if 'values' in data and str(data.get('values') or '').strip():
-            values, error, code = validate_community_ref(data['values'])
-            if error:
-                return {'error': error, 'code': code}, 400
-            updates['values'] = values
-        else:
-            updates.pop('values', None)
-
-        if 'name' in data:
-            name, derived, error, code = validate_community_name(data['name'])
-            if error:
-                return {'error': error, 'code': code}, 400
-            updates['name'] = name
-            # Auto-managed means "equals what the old name implies". Anything
-            # else was chosen on purpose and survives the rename.
-            if (existing.values or '').strip() == (derive_community_values(existing.name) or ''):
-                updates['values'] = derived
-
-        if 'name' in updates:
-            duplicate = session.query(Community).filter(
-                Community.name == updates['name'],
-                Community.id != community_id,
-            ).first()
-            if duplicate is not None:
-                return {'error': 'Community name already exists', 'code': 'duplicate_community_name'}, 409
-
-        community = crud.update_community(
-            session=session, community_id=community_id, **updates
-        )
-        if community:
-            _regenerate_staged(session)
-            return {'community': {
-                'id': community.id, 'name': community.name, 'values': community.values, 'description': community.description,
-                'enabled': community.enabled,
-            }}, 200
-        return {'error': 'Community not found', 'code': 'community_not_found'}, 404
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/communities/<int:community_id>', method='DELETE')
-def delete_community(request):
-    """Delete a community record."""
-    try:
-        community_id = int(request.path.split('/')[-1])
-
-        session = get_session()
-        existing = crud.get_community_by_id(session, community_id)
-        if not existing:
-            return {'error': 'Community not found', 'code': 'community_not_found'}, 404
-
-        community = crud.delete_community(
-            session=session, community_id=community_id
-        )
-        if community:
-            _regenerate_staged(session)
-            return {
-                'message': 'Community deleted',
-                'community': {'id': community.id, 'name': community.name},
-            }, 200
-        return {'error': 'Community not found', 'code': 'community_not_found'}, 404
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
 
 
 # --- BGP Peer Routes ---
@@ -1131,489 +700,22 @@ def get_bgp_peers(request):
         return {'error': _error_message(e), 'code': 'server_error'}, 500
 
 
-
-
-@route('/api/bgp_peers/count', method='GET')
-def get_bgp_peer_count(request):
-    """Number of BGP peer records, without their contents.
-
-    Mirrors /api/networks/count: the peer panel starts collapsed and shows only
-    a counter, so the list itself is fetched lazily on first expand. The path
-    cannot collide with /api/bgp_peers/<int:peer_id> — route patterns are
-    anchored, and "count" is not a digit.
-    """
-    try:
-        session = get_session()
-        return {'count': crud.count_bgp_peers(session)}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/bgp_peers', method='POST')
-def create_bgp_peer(request):
-    """Create a BGP peer after full validation.
-
-    Fields: name (BIRD identifier), local_as (default ``65500``, any valid
-    ASN), neighbor (strict IPv4, no /mask, not already used by another peer /
-    active config block), neighbor_as (any valid ASN that is not already used
-    by another peer / active config block).
-    """
-    try:
-        data = request.body_data if request.body_data else {}
-
-        name, error, code = Validator.validate_bird_identifier(data.get('name'))
-        if error:
-            return {'error': 400, 'message': error, 'code': code}, 400
-        neighbor_as, error, code = Validator.validate_asn(data.get('neighbor_as'), 'Neighbor ASN')
-        if error:
-            return {'error': 400, 'message': error, 'code': code}, 400
-        neighbor, error, code = Validator.validate_ipv4(data.get('neighbor'))
-        if error:
-            return {'error': 400, 'message': error, 'code': code}, 400
-        local_as_value = data.get('local_as') or '65500'
-        local_as, error, code = Validator.validate_asn(local_as_value, 'Local ASN')
-        if error:
-            return {'error': 400, 'message': error, 'code': code}, 400
-
-        session = get_session()
-        if _asn_already_in_use(session, neighbor_as):
-            return {
-                'error': 400,
-                'message': f'ASN {neighbor_as} уже используется другим пиром (peer id / конфиг)',
-                'code': 'asn_already_in_use',
-            }, 400
-        if _neighbor_already_in_use(session, neighbor):
-            return {
-                'error': 400,
-                'message': f'Neighbor {neighbor} уже используется другим пиром (peer id / конфиг)',
-                'code': 'neighbor_already_in_use',
-            }, 400
-
-        peer = crud.create_bgp_peer(
-            session=session,
-            name=name,
-            local_as=local_as,
-            neighbor=neighbor,
-            neighbor_as=neighbor_as,
-            status=data.get('status', 'active'),
-            user_id=data.get('user_id', 'system'),
-            export_all=bool(data.get('export_all', False)),
-        )
-        _regenerate_staged(session)
-        # Same fields the list endpoint returns, so the form can warn about a
-        # missing ASN straight from the POST response instead of waiting for a
-        # refresh.
-        asn = _peer_local_asn({'local_as': peer.local_as})
-        asn_prefixes = _cached_peer_asn_prefix_counts(session)
-        return {'bgp_peer': {
-            'id': peer.id, 'name': peer.name, 'local_as': peer.local_as,
-            'neighbor': peer.neighbor, 'neighbor_as': peer.neighbor_as,
-            'status': peer.status,
-            'export_all': bool(peer.export_all),
-            'export_count': len(asn_prefixes.get(asn, {})),
-            'asn_found': asn in asn_prefixes,
-        }}, 201
-    except IntegrityError:
-        # Lost a race against a concurrent create: the unique constraint is the
-        # authority, report it the same way the pre-insert check does.
-        return {
-            'error': 400,
-            'message': 'Peer с таким neighbor уже существует',
-            'code': 'neighbor_duplicate',
-        }, 400
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/bgp_peers/<int:peer_id>', method='DELETE')
-def delete_bgp_peer(request):
-    """Delete a BGP peer record."""
-    try:
-        peer_id = int(request.path.split('/')[-1])
-
-        session = get_session()
-        existing = crud.get_bgp_peer_by_id(session, peer_id)
-        if not existing:
-            return {'error': 'BGP peer not found', 'code': 'bgp_peer_not_found'}, 404
-
-        peer = crud.delete_bgp_peer(
-            session=session, peer_id=peer_id, user_id='system'
-        )
-        if peer:
-            _regenerate_staged(session)
-            return {
-                'message': 'BGP peer deleted',
-                'bgp_peer': {'id': peer.id, 'name': peer.name},
-            }, 200
-        return {'error': 'BGP peer not found', 'code': 'bgp_peer_not_found'}, 404
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/generate', method='POST')
-def generate_config(request):
-    """Generate BIRD configuration from database data."""
-    try:
-        session = get_session()
-        config_path = _regenerate_staged(session)
-        if config_path is None:
-            return {'error': 'Config generation failed', 'code': 'config_generation_failed'}, 500
-        return {'status': 'success', 'config_path': config_path}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/diff', method='GET')
-def get_config_diff(request):
-    """Get diff between live and staged configuration."""
-    try:
-        filename = request.args.get('filename', ['networks.conf'])[0] if 'filename' in request.args else 'networks.conf'
-        if not _is_editable_config(filename):
-            return {'error': 'Only networks.conf is editable', 'code': 'editable_only_networks_conf'}, 400
-        diff_output = diff_engine.get_diff(filename)
-        return {'diff': diff_output, 'filename': filename}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/file-rows', method='GET')
-def get_config_file_rows(request):
-    """Aligned live→staged rows of one generated bundle file.
-
-    Read-only. Each row carries both sides, so the panel can render two
-    columns of equal height and align them by index — a file pane next to a
-    unified diff can never align, because the diff carries its own header
-    lines and a different number of lines.
-
-    The name is checked against the bundle's own file list, so nothing from the
-    request can reach the filesystem. The counters and ``total_rows`` are
-    exact; only the rows are capped, and ``truncated`` reports it.
-    """
-    try:
-        filename = request.args.get('filename', [''])[0] if 'filename' in request.args else ''
-        if not filename or not is_bundle_filename(filename):
-            return {'error': 'Unknown bundle file', 'code': 'unknown_bundle_file'}, 400
-        return config_manager.get_file_rows_view(filename), 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/file-diff', method='GET')
-def get_config_file_diff(request):
-    """Read-only live→staged diff for one generated bundle file.
-
-    Read-only counterpart of the editable-file diff above. The name is checked
-    against the bundle's own file list, so nothing from the request can reach
-    the filesystem. The change counts are exact; the diff text is capped and
-    ``truncated`` reports whether it was, with the full size in ``total_lines``.
-    """
-    try:
-        filename = request.args.get('filename', [''])[0] if 'filename' in request.args else ''
-        if not filename or not is_bundle_filename(filename):
-            return {'error': 'Unknown bundle file', 'code': 'unknown_bundle_file'}, 400
-        return config_manager.get_file_diff_view(filename), 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/diff/all', method='GET')
-def get_all_config_diffs(request):
-    """Get diffs for all files between live and staged."""
-    try:
-        all_diffs = diff_engine.get_all_diffs()
-        count_diff = diff_engine.get_file_count_diff()
-        return {'diffs': all_diffs, 'summary': count_diff}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/syntax-check', method='GET')
-def check_syntax(request):
-    """Check syntax validation of staged configuration."""
-    try:
-        filename = request.args.get('filename', ['networks.conf'])[0] if 'filename' in request.args else 'networks.conf'
-        if not _is_editable_config(filename):
-            return {'error': 'Only networks.conf is editable', 'code': 'editable_only_networks_conf'}, 400
-        if config_manager.split_mode:
-            result = config_manager.validate_staged_bundle()
-        else:
-            validator = SyntaxValidator()
-            validator.staged_path = diff_engine.staged_path
-            result = validator.validate_staged_config(filename)
-        return result, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/staged', method='GET')
-def get_staged_config(request):
-    """Get the current staged configuration content."""
-    try:
-        filename = request.args.get('filename', ['networks.conf'])[0] if 'filename' in request.args else 'networks.conf'
-        if not _is_editable_config(filename):
-            return {'error': 'Only networks.conf is editable', 'code': 'editable_only_networks_conf'}, 400
-        content = diff_engine.get_staged_content(filename)
-        return {'content': content, 'filename': filename}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/config/apply', method='POST')
-def apply_config(request):
-    """POST /api/config/apply — apply config to live and reload BIRD.
-
-    If `content` is present in the body it is merged with database-derived
-    blocks (variant B, see ConfigManager.apply_config_from_content);
-    otherwise the existing staged file is applied.
-    """
-    try:
-        data = request.body_data if request.body_data else {}
-        filename = data.get('filename', 'networks.conf')
-        if not _is_editable_config(filename):
-            return {'error': 'Only networks.conf is editable', 'code': 'editable_only_networks_conf'}, 400
-        user_id = data.get('user_id', 'system')
-        user_content = data.get('content', '')
-        has_content = 'content' in data and data.get('content') is not None
-
-        if has_content:
-            session = get_session()
-            networks = [
-                {
-                    'prefix': n.prefix, 'description': n.description, 'status': n.status,
-                    'enabled': n.enabled,
-                    'community_ids': _as_community_ids(n.community_ids),
-                }
-                for n in crud.get_networks(session)
-            ]
-            communities = [
-                {'id': c.id, 'name': c.name, 'values': c.values, 'description': c.description, 'enabled': c.enabled}
-                for c in crud.get_communities(session)
-            ]
-            bgp_peers = _db_bgp_peers(session)
-            result = config_manager.apply_config_from_content(
-                filename, user_content, user_id, networks, communities, bgp_peers=bgp_peers
-            )
-        else:
-            result = config_manager.apply_config(filename=filename, user_id=user_id)
-        status_code = 200 if result['status'] in ('success', 'success_with_warning') else (404 if result.get('status') == 'file_not_found' else 400)
-        return result, status_code
-    except Exception as e:
-        return {'error': _error_message(e), 'status': 'error', 'code': 'server_error'}, 500
-
-
-@route('/api/config/rollback', method='POST')
-def rollback_config(request):
-    """Rollback the last applied configuration."""
-    try:
-        filename = request.args.get('filename', [None])[0] if 'filename' in request.args else None
-        if not filename:
-            return {'error': 'Missing required parameter: filename', 'code': 'missing_filename'}, 400
-        if not _is_editable_config(filename):
-            return {'error': 'Only networks.conf is editable', 'code': 'editable_only_networks_conf'}, 400
-
-        user_id = request.args.get('user_id', ['system'])[0] if 'user_id' in request.args else 'system'
-        result = config_manager.rollback_last_apply(filename=filename, user_id=user_id)
-        if result['status'] in ('success', 'success_with_warning'):
-            status_code = 200
-        elif result.get('status') == 'backup_not_found':
-            status_code = 404
-        else:
-            status_code = 400
-        return result, status_code
-    except Exception as e:
-        return {'error': _error_message(e), 'status': 'error', 'code': 'server_error'}, 500
-
-
-@route('/api/config/status', method='GET')
-def get_config_status(request):
-    """Get the last apply metadata for a configuration file."""
-    try:
-        filename = request.args.get('filename', ['networks.conf'])[0] if 'filename' in request.args else 'networks.conf'
-        status_data = config_manager.get_apply_status(filename)
-        # Add 'status' key to match API documentation
-        status_data['status'] = 'success' if any(status_data.values()) else 'no_history'
-        status_data['backup'] = backup_info(_DB_PATH)
-        return status_data, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-
-
-@route('/api/backup', method='POST')
-def backup_snapshot(request):
-    """POST /api/backup — create a rotating full snapshot (@@ db+staged+live)."""
-    try:
-        data = request.body_data if request.body_data else {}
-        info = create_backup(_LIVE_PATH, _STAGED_PATH, _DB_PATH)
-        _audit_action('BACKUP', data.get('user_id'))
-        return {'status': 'success', 'backup': info}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'status': 'error', 'code': 'server_error'}, 500
-
-
-def _restore_backup_request(request, backup_id=None):
-    try:
-        data = request.body_data if request.body_data else {}
-        engine.dispose()
-        try:
-            result = restore_backup(_LIVE_PATH, _STAGED_PATH, _DB_PATH, backup_id=backup_id)
-        except ValueError as exc:
-            return {'error': str(exc), 'status': 'error', 'code': 'invalid_backup_id'}, 400
-        if result['status'] != 'success':
-            return result, 400
-        ensure_schema(engine)
-        restored_session = get_session()
-        _regenerate_staged(restored_session)
-        reload_success, reload_warning, reload_detail = config_manager._attempt_bird_reload()
-        config_manager._write_apply_state(reload_warning, reload_detail)
-        _audit_action('RESTORE_BACKUP', data.get('user_id'))
-        return {
-            'status': 'success',
-            'message': result['message'],
-            'code': result.get('code'),
-            'reload_warning': reload_warning,
-            'reload_detail': reload_detail,
-            'backup': backup_info(_DB_PATH),
-        }, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'status': 'error', 'code': 'server_error'}, 500
-
-
-@route('/api/backup/restore', method='POST')
-def backup_restore(request):
-    """POST /api/backup/restore — restore the newest snapshot."""
-    return _restore_backup_request(request)
-
-
-@route('/api/backup/<string:backup_id>/restore', method='POST')
-def backup_restore_selected(request):
-    """POST /api/backup/<backup_id>/restore — restore one selected snapshot."""
-    backup_id = request.path.split('/')[-2]
-    return _restore_backup_request(request, backup_id=backup_id)
-
-
-@route('/api/backup/<string:backup_id>', method='DELETE')
-def backup_delete(request):
-    """DELETE /api/backup/<backup_id> — delete one snapshot."""
-    try:
-        backup_id = request.path.rsplit('/', 1)[-1]
-        result = delete_backup(backup_id, _DB_PATH)
-    except ValueError as exc:
-        return {'error': str(exc), 'status': 'error', 'code': 'invalid_backup_id'}, 400
-    if result['status'] != 'success':
-        return result, 404
-    data = request.body_data if request.body_data else {}
-    _audit_action('DELETE_BACKUP', data.get('user_id'))
-    return result, 200
-
-
-@route('/api/bird/reload', method='POST')
-def bird_reload(request):
-    """POST /api/bird/reload — reconfigure BIRD through birdc."""
-    try:
-        data = request.body_data if request.body_data else {}
-        success, warning, detail = config_manager._attempt_bird_reload()
-        config_manager._write_apply_state(warning, detail)
-        if success:
-            _audit_action('BIRD_RECONFIGURE', data.get('user_id'))
-        return {
-            'status': 'ok' if success else 'error',
-            'bird_running': os.path.exists(config_manager._bird_socket_path()),
-            'error': detail,
-        }, 200
-    except Exception as e:
-        return {'status': 'error', 'error': str(e), 'code': 'server_error'}, 200
-
-
-@route('/api/bird/protocols', method='GET')
-def get_bird_protocols(request):
-    """GET /api/bird/protocols — live snapshot from `birdc show protocols all`.
-
-    Read-only view of the running daemon. Every BGP session found in BIRD is
-    reported, including protocols added to bird.conf by hand; peers configured
-    in the panel but missing from the BIRD output are appended with
-    ``in_bird: false`` so the discrepancy stays visible.
-    """
-    try:
-        snapshot = config_manager._bird_protocols()
-        managed_names = set()
-        try:
-            session = get_session()
-            managed_names = {p.name for p in crud.get_bgp_peers(session)}
-        except Exception:
-            managed_names = set()
-
-        peers = []
-        for record in snapshot['bgp']:
-            record['managed'] = record['name'] in managed_names
-            peers.append(record)
-        # Peers from the panel are only appended when BIRD answered: "not in
-        # BIRD" is a statement about the daemon, so it needs a readable
-        # protocol list behind it.
-        if snapshot['error'] is None:
-            for name in sorted(managed_names):
-                if any(peer['name'] == name for peer in peers):
-                    continue
-                peers.append({
-                    'name': name,
-                    'state': None,
-                    'bgp_state': None,
-                    'channel_state': None,
-                    'neighbor': None,
-                    'neighbor_as': None,
-                    'local_as': None,
-                    'since': None,
-                    'info': None,
-                    'last_error': None,
-                    'imported': None,
-                    'exported': None,
-                    'in_bird': False,
-                    'managed': True,
-                })
-        return {
-            'status': 'error' if snapshot['error'] else 'ok',
-            'bird_running': snapshot['bird_running'],
-            'error': snapshot['error'],
-            'peers': peers,
-            'service': snapshot['service'],
-        }, 200
-    except Exception as e:
-        return {'status': 'error', 'error': _error_message(e), 'code': 'server_error'}, 200
-
-
-@route('/api/audit', method='GET')
-def get_audit_log(request):
-    """Get recent audit log entries."""
-    try:
-        limit_str = request.args.get('limit', ['50'])[0] if 'limit' in request.args else '50'
-        session = get_session()
-        audit_entries = crud.get_audit_log(session, int(limit_str))
-
-        log_list = [{
-            'id': entry.id, 'action': entry.action, 'timestamp': str(entry.timestamp),
-            'user_id': entry.user_id, 'diff_summary': entry.diff_summary,
-        } for entry in audit_entries]
-
-        return {'audit_log': log_list, 'count': len(log_list)}, 200
-    except Exception as e:
-        return {'error': _error_message(e), 'code': 'server_error'}, 500
-
-
-@route('/api/health', method='GET')
-def health_check(request):
-    """Check API, main include migration, and last reload state."""
-    state = config_manager._read_apply_state()
-    main_valid, main_detail = config_manager._main_entrypoint_state()
-    reload_warning = bool(state.get('reload_warning'))
-    warning = reload_warning or not main_valid
-    detail = state.get('reload_detail') if reload_warning else main_detail
-    return {
-        'status': 'degraded' if warning else 'healthy',
-        'service': 'bird-manager',
-        'reload_warning': warning,
-        'reload_detail': detail,
-    }, 200
+# Handler modules register their routes on import (historical section
+# order; patterns are anchored, so matching does not depend on it).
+try:
+    from . import api_networks  # noqa: F401 — registers routes on import
+    from . import api_communities  # noqa: F401 — registers routes on import
+    from . import api_peers  # noqa: F401 — registers routes on import
+    from . import api_config  # noqa: F401 — registers routes on import
+    from . import api_backup  # noqa: F401 — registers routes on import
+    from . import api_system  # noqa: F401 — registers routes on import
+except ImportError:
+    import api_networks  # noqa: F401 — registers routes on import
+    import api_communities  # noqa: F401 — registers routes on import
+    import api_peers  # noqa: F401 — registers routes on import
+    import api_config  # noqa: F401 — registers routes on import
+    import api_backup  # noqa: F401 — registers routes on import
+    import api_system  # noqa: F401 — registers routes on import
 
 
 # ==================== WSGI Entrypoint ====================
