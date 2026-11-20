@@ -25,6 +25,9 @@ jobs:
 
       # Several tests hardcode /usr/sbin/bird; bird3 from Ubuntu universe
       # provides that path. birdc is mocked by the tests themselves.
+      - name: Prepare environment file
+        run: cp .env.example .env
+
       - name: Install BIRD
         run: sudo apt-get update && sudo apt-get install -y bird3
 
