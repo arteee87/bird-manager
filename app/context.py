@@ -29,6 +29,7 @@ try:
     from .diff_engine import DiffEngine
     from .config_manager import ConfigManager
     from .models import AuditLog, ensure_schema
+    from .log import log
 except ImportError:
     _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _parent_dir not in sys.path:
@@ -47,6 +48,7 @@ except ImportError:
     from diff_engine import DiffEngine
     from config_manager import ConfigManager
     from models import AuditLog, ensure_schema
+    from log import log
 
 
 # Upgrade path for existing installs: create_all is idempotent and only adds
@@ -104,7 +106,7 @@ GENERIC_ERROR_TEXT = 'Внутренняя ошибка сервера'
 
 def _error_message(exc):
     """Log the failure and return text that is safe to send to the client."""
-    print(f"[ERROR] {type(exc).__name__}: {exc}", flush=True)
+    log.error(f"[ERROR] {type(exc).__name__}: {exc}")
     traceback.print_exc()
     if _bool_env('BIRD_DEBUG_ERRORS', False):
         return str(exc)

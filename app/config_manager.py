@@ -12,6 +12,7 @@ from datetime import datetime
 
 try:
     from .models import AuditLog, Network
+    from .log import log
     from .utils import local_now
     from .syntax_validator import SyntaxValidator
     from .diff_engine import DiffEngine, aligned_rows, diff_contents, measure_rows
@@ -41,6 +42,7 @@ try:
     )
 except ImportError:
     from models import AuditLog, Network
+    from log import log
     from utils import local_now
     from syntax_validator import SyntaxValidator
     from diff_engine import DiffEngine, aligned_rows, diff_contents, measure_rows
@@ -427,7 +429,7 @@ class ConfigManager:
         try:
             return self._file_state(name)
         except Exception as exc:
-            print(f'[ERROR] {name}: не удалось прочитать состояние: {exc}', flush=True)
+            log.error(f'[ERROR] {name}: не удалось прочитать состояние: {exc}')
             return {
                 'content': None, 'diff': '', 'adds': 0, 'dels': 0, 'rows': 0,
                 'exists': os.path.isfile(os.path.join(self.live_path, name)),

@@ -33,6 +33,7 @@ try:
         _resolve_router_id,
     )
     from .syntax_validator import SyntaxValidator
+    from .log import log
     _package_mode = True
 except ImportError:
     _parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,6 +48,7 @@ except ImportError:
         _resolve_router_id,
     )
     from syntax_validator import SyntaxValidator
+    from log import log
     _package_mode = False
 
 # Shared runtime state and helpers live in context.py. The re-exports keep
@@ -250,7 +252,7 @@ def _parse_networks(raw):
         try:
             networks.append(ipaddress.ip_network(token, strict=False))
         except ValueError:
-            print(f"[WARN] ignoring invalid address entry in allowlist: {token}", flush=True)
+            log.warning(f"[WARN] ignoring invalid address entry in allowlist: {token}")
     return tuple(networks)
 
 
@@ -344,14 +346,14 @@ def _log_access_settings(settings):
     sources = ', '.join(str(network) for network in settings['sources']) or '(any)'
     proxies = ', '.join(str(network) for network in settings['proxies']) or '(none)'
     origins = ', '.join(sorted(settings['origins'])) or '(origin check disabled)'
-    print(f"[ACCESS] trusted sources: {sources}", flush=True)
-    print(f"[ACCESS] trusted proxies: {proxies}", flush=True)
-    print(f"[ACCESS] trusted origins: {origins}", flush=True)
-    print(f"[ACCESS] max request body: {settings['max_body']} bytes", flush=True)
+    log.info(f"[ACCESS] trusted sources: {sources}")
+    log.info(f"[ACCESS] trusted proxies: {proxies}")
+    log.info(f"[ACCESS] trusted origins: {origins}")
+    log.info(f"[ACCESS] max request body: {settings['max_body']} bytes")
     if not settings['sources']:
-        print("[WARN] BIRD_TRUSTED_SOURCES is empty — every client may change the BIRD configuration", flush=True)
+        log.warning("[WARN] BIRD_TRUSTED_SOURCES is empty — every client may change the BIRD configuration")
     if not settings['origins']:
-        print("[WARN] BIRD_TRUSTED_ORIGINS is empty — cross-origin browser requests are not checked", flush=True)
+        log.warning("[WARN] BIRD_TRUSTED_ORIGINS is empty — cross-origin browser requests are not checked")
 
 
 #: Bodies at least this large are gzipped when the client accepts it. Below the
@@ -404,14 +406,14 @@ def _respond(start_response, status_phrase, content_type, body, environ, started
         preview = body.decode('utf-8')
         if len(preview) > 200:
             preview = preview[:200] + '...'
-        print(prefix, flush=True)
+        log.info(prefix)
         if note:
-            print(f'[DENY] {note}', flush=True)
-        print(f'[RESP] {preview}', flush=True)
+            log.warning(f'[DENY] {note}')
+        log.info(f'[RESP] {preview}')
     else:
-        print(prefix + f' | content-type: {content_type}', flush=True)
+        log.info(prefix + f' | content-type: {content_type}')
         if note:
-            print(f'[DENY] {note}', flush=True)
+            log.warning(f'[DENY] {note}')
     payload, extra = _maybe_gzip(body, environ, content_type)
     start_response(status_phrase, _response_headers(content_type, extra))
     return [payload]
@@ -492,7 +494,7 @@ def _create_wsgi_app():
             else:
                 return _send('500 Internal Server Error', 'application/json', json.dumps({'error': 'Invalid handler response'}).encode('utf-8'))
         except Exception as e:
-            print(f"[API] Unhandled exception for {request.method} {request.path}: {e}", flush=True)
+            log.info(f"[API] Unhandled exception for {request.method} {request.path}: {e}")
             message = _error_message(e)
             return _send(_status_phrase(500), 'application/json',
                          json.dumps({'error': message, 'status': 'error'}).encode('utf-8'))
@@ -752,15 +754,15 @@ if __name__ == '__main__':
 
     host = args.host or _listen_address()
     _log_access_settings(_access_settings())
-    print(f"[START] bird-manager API server launching on http://{host}:{args.port} ...", flush=True)
+    log.info(f"[START] bird-manager API server launching on http://{host}:{args.port} ...")
     try:
         if args.test_mode:
             _serve_with_timeout(host=host, port=args.port, timeout_sec=args.timeout)
-            print("[OK] bird-manager test mode finished without startup errors.", flush=True)
+            log.info("[OK] bird-manager test mode finished without startup errors.")
         else:
             import waitress
-            print(f"[OK] bird-manager API server started successfully on http://{host}:{args.port}", flush=True)
+            log.info(f"[OK] bird-manager API server started successfully on http://{host}:{args.port}")
             waitress.serve(app, host=host, port=args.port)
     except Exception as e:
-        print(f"[ERROR] Failed to start bird-manager API server: {e}", flush=True)
+        log.error(f"[ERROR] Failed to start bird-manager API server: {e}")
         sys.exit(1)

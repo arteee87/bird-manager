@@ -4,8 +4,10 @@ from sqlalchemy.schema import CreateTable
 
 try:
     from .utils import local_now
+    from .log import log
 except ImportError:  # pragma: no cover - direct script execution
     from utils import local_now
+    from log import log
 
 Base = declarative_base()
 
@@ -55,11 +57,9 @@ def _ensure_bgp_peer_neighbor_unique(connection):
     )).fetchall()
     if duplicates:
         listed = ', '.join(f'{row[0]} (x{row[1]})' for row in duplicates)
-        print(
+        log.error(
             '[ERROR] bgp_peers: neighbor duplicates found, UNIQUE not added: '
-            f'{listed}. Resolve them and restart to add the constraint.',
-            flush=True,
-        )
+            f'{listed}. Resolve them and restart to add the constraint.')
         return
 
     metadata = MetaData()
@@ -75,10 +75,8 @@ def _ensure_bgp_peer_neighbor_unique(connection):
     connection.execute(text(
         f'ALTER TABLE {BGP_PEER_MIGRATION_TABLE} RENAME TO bgp_peers'
     ))
-    print(
-        '[INFO] bgp_peers: UNIQUE(neighbor) added to the existing table',
-        flush=True,
-    )
+    log.info(
+        '[INFO] bgp_peers: UNIQUE(neighbor) added to the existing table')
 
 
 def _materialise_community_values(connection):
@@ -122,8 +120,8 @@ def _materialise_community_values(connection):
                 {'values': derived, 'id': community_id},
             )
             changed += 1
-            print(f'[INFO] communities: id={community_id} '
-                  f'values <- name ({derived})', flush=True)
+            log.info(f'[INFO] communities: id={community_id} '
+                  f'values <- name ({derived})')
         elif name_text == '65534' and current == '0':
             # Same pair, spelled the way a rename can recognise.
             connection.execute(
@@ -131,8 +129,8 @@ def _materialise_community_values(connection):
                 {'values': '65534:0', 'id': community_id},
             )
             changed += 1
-            print(f'[INFO] communities: id={community_id} '
-                  f'values 0 -> 65534:0', flush=True)
+            log.info(f'[INFO] communities: id={community_id} '
+                  f'values 0 -> 65534:0')
 
     return changed
 
@@ -156,16 +154,14 @@ def ensure_schema(engine):
             connection.execute(text(
                 'ALTER TABLE bgp_peers ADD COLUMN export_all BOOLEAN NOT NULL DEFAULT 0'
             ))
-            print('[INFO] bgp_peers: export_all added', flush=True)
+            log.info('[INFO] bgp_peers: export_all added')
 
         try:
             _ensure_bgp_peer_neighbor_unique(connection)
         except Exception as exc:
-            print(
+            log.error(
                 f'[ERROR] bgp_peers UNIQUE(neighbor) migration failed: '
-                f'{type(exc).__name__}: {exc}',
-                flush=True,
-            )
+                f'{type(exc).__name__}: {exc}')
             raise
         # Indexes on hot columns (additive; idempotent).
         for stmt in (
@@ -179,11 +175,9 @@ def ensure_schema(engine):
         try:
             _materialise_community_values(connection)
         except Exception as exc:
-            print(
+            log.error(
                 f'[ERROR] communities values migration failed: '
-                f'{type(exc).__name__}: {exc}',
-                flush=True,
-            )
+                f'{type(exc).__name__}: {exc}')
             raise
 
 
