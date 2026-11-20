@@ -23,7 +23,7 @@ The service runs as the dedicated `bird-manager` system user, supplementary
 group `bird`, and can write only `/etc/bird/live` and `/var/lib/bird-manager`.
 The live directory is setgid, so atomic replacements inherit group `bird` for
 BIRD reads. The main BIRD configuration remains read-only to the service. The project uses
-system Python packages and does not ship a virtualenv. BIRD (`bird3`, `bird2` or
+system Python packages and does not ship a virtualenv. BIRD (`bird3` or
 `bird`) must be installed.
 
 Generated files
@@ -60,7 +60,7 @@ with `bird -p` and reloads BIRD with unprivileged `birdc configure`.
 
 For a manual BIRD setup:
 
-    install bird3            # or bird2
+    install bird3
     systemctl enable --now bird
     birdc show status
 

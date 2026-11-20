@@ -7,7 +7,9 @@ on:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    # Same OS as dev (Ubuntu 26.04): bird3 is packaged only from 26.04 on,
+    # so this keeps CI and dev on the identical BIRD version.
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
@@ -21,10 +23,10 @@ jobs:
         with:
           node-version: '22'
 
-      # Several tests hardcode /usr/sbin/bird; bird2 from Ubuntu universe
+      # Several tests hardcode /usr/sbin/bird; bird3 from Ubuntu universe
       # provides that path. birdc is mocked by the tests themselves.
       - name: Install BIRD
-        run: sudo apt-get update && sudo apt-get install -y bird2
+        run: sudo apt-get update && sudo apt-get install -y bird3
 
       - name: Install dependencies
         run: pip install -r requirements.txt pytest
